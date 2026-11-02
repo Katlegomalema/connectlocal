@@ -9,7 +9,7 @@ import { z } from 'zod';
 export const emailSchema = z.string().email('Invalid email address');
 
 // Phone validation (international format)
-export const phoneSchema = z.string().regex(/^\+?[1-9]\d{1,14}$/, 'Invalid phone number');
+export const phoneSchema = z.string().regex(/^\+[1-9]\d{7,14}$/, 'Phone number must use E.164 format');
 
 // Password validation
 export const passwordSchema = z.string()

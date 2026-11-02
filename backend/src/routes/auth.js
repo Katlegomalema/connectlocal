@@ -50,6 +50,9 @@ const verifyPhoneSchema = z.object({
   phone: z.string(),
   otp: z.string().length(6, 'OTP must be 6 digits')
 });
+const sendPhoneOtpSchema = z.object({
+  phone: z.string().regex(/^\+[1-9]\d{7,14}$/, 'Phone number must use E.164 format')
+});
 
 /**
  * POST /api/v1/auth/register
@@ -76,7 +79,7 @@ router.post('/register', validateBody(registerSchema), asyncHandler(async (req, 
       user: {
         id: user.id,
         email: user.email,
-        role: req.validatedBody.role
+        role: user.application_profile.role
       }
     }
   });
@@ -136,7 +139,8 @@ router.post('/refresh', validateBody(refreshTokenSchema), asyncHandler(async (re
 router.post('/logout', verifyToken, asyncHandler(async (req, res) => {
   logger.info(`Logout request: ${req.user.id}`);
 
-  await authService.logoutUser(req.user.id);
+    const accessToken = req.headers.authorization?.split(' ')[1];
+  await authService.logoutUser(accessToken);
 
   res.status(200).json({
     success: true,
@@ -201,15 +205,18 @@ router.post('/verify-email', validateBody(verifyEmailSchema), asyncHandler(async
  */
 router.post('/verify-phone', validateBody(verifyPhoneSchema), asyncHandler(async (req, res) => {
   logger.info('Phone verification request');
-
-  // TODO: Implement phone OTP verification
-  // This requires Twilio OTP verification integration
-  // await authService.verifyPhoneWithOtp(req.validatedBody.phone, req.validatedBody.otp);
+  const user = await authService.verifyPhoneWithOtp(req.validatedBody.phone, req.validatedBody.otp);
 
   res.status(200).json({
     success: true,
-    message: 'Phone verified successfully'
+    message: 'Phone verified successfully',
+    data: { user: { id: user.id, phone: user.phone } }
   });
+}));
+
+router.post('/phone/otp', validateBody(sendPhoneOtpSchema), asyncHandler(async (req, res) => {
+  await authService.sendPhoneOtp(req.validatedBody.phone);
+  res.status(200).json({ success: true, message: 'Phone verification code sent' });
 }));
 
 /**

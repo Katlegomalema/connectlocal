@@ -3,6 +3,7 @@
  * Starts the Express server on the configured port
  */
 
+import 'dotenv/config';
 import app from './src/app.js';
 import logger from './src/utils/logger.js';
 

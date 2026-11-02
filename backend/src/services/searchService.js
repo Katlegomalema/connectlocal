@@ -1,72 +1,96 @@
 /**
- * Search Service (Stub)
- * Location-based provider search
+ * Search Service
+ * Provider discovery and filtering
  */
 
-import logger from '../utils/logger.js';
-import { calculateDistance } from '../utils/helpers.js';
+import * as providerRepository from '../repositories/providerRepository.js';
+import { AppError, ValidationError } from '../utils/errors.js';
 
-/**
- * Search for providers near a location
- */
-export const searchNearby = async (latitude, longitude, radiusKm = 50, filters = {}) => {
-  try {
-    logger.info('Searching nearby providers', { latitude, longitude, radiusKm });
-
-    // Query PostGIS-enabled database for nearby providers
-    // Apply filters (category, rating, price)
-    // Calculate distances
-    // Return sorted results
-
-    return {
-      providers: [],
-      count: 0,
-      searchCenter: { latitude, longitude },
-      radiusKm
-    };
-  } catch (error) {
-    logger.error('Error searching providers:', error);
-    throw error;
+const parsePagination = (pageValue, limitValue) => {
+  const page = Number.parseInt(pageValue, 10) || 1;
+  const limit = Number.parseInt(limitValue, 10) || 20;
+  if (!Number.isInteger(page) || !Number.isInteger(limit) || page < 1 || limit < 1 || limit > 100) {
+    throw new ValidationError('page must be positive and limit must be between 1 and 100');
   }
+  return { page, limit };
 };
 
-/**
- * Search providers by query text
- */
-export const searchProviders = async (query, page = 1, limit = 20) => {
-  try {
-    // Full-text search on provider names, categories, descriptions
-    return {
-      providers: [],
-      total: 0,
-      page,
-      pages: 0,
-      query
-    };
-  } catch (error) {
-    logger.error('Error searching providers:', error);
-    throw error;
+export const searchNearby = async (latitudeValue, longitudeValue, radiusValue = 50, filters = {}) => {
+  const latitude = Number(latitudeValue);
+  const longitude = Number(longitudeValue);
+  const radiusKm = Number(radiusValue);
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+      || !Number.isFinite(longitude) || longitude < -180 || longitude > 180
+      || !Number.isFinite(radiusKm) || radiusKm < 1 || radiusKm > 50) {
+    throw new ValidationError('Valid latitude, longitude, and radius (1 to 50 km) are required');
   }
+
+  const minRating = filters.minRating === undefined ? 0 : Number(filters.minRating);
+  const maxPrice = filters.maxPrice === undefined ? Infinity : Number(filters.maxPrice);
+  if (!Number.isFinite(minRating) || minRating < 0 || minRating > 5
+      || (filters.maxPrice !== undefined && (!Number.isFinite(maxPrice) || maxPrice < 0))) {
+    throw new ValidationError('Invalid rating or price filter');
+  }
+
+  let providers = await providerRepository.searchProvidersByLocation(latitude, longitude, radiusKm);
+  providers = providers.filter((provider) => Number(provider.average_rating || 0) >= minRating);
+  const services = await providerRepository.listActiveServicesForProviders(providers.map((provider) => provider.id));
+  const servicesByProvider = new Map();
+  for (const service of services) {
+    const list = servicesByProvider.get(service.provider_id) || [];
+    list.push(service);
+    servicesByProvider.set(service.provider_id, list);
+  }
+
+  providers = providers.map((provider) => ({
+    ...provider,
+    services: servicesByProvider.get(provider.id) || []
+  }));
+  if (filters.category) {
+    providers = providers.filter((provider) => provider.services.some((service) => service.category === filters.category));
+  }
+  if (Number.isFinite(maxPrice)) {
+    providers = providers.filter((provider) => provider.services.some((service) => Number(service.price) <= maxPrice));
+  }
+
+  return {
+    providers,
+    count: providers.length,
+    searchCenter: { latitude, longitude },
+    radiusKm
+  };
 };
 
-/**
- * Get all service categories
- */
-export const getCategories = async () => {
-  try {
-    return [
-      { id: 'plumbing', name: 'Plumbing', icon: '🔧' },
-      { id: 'electrical', name: 'Electrical', icon: '⚡' },
-      // ... more categories
-    ];
-  } catch (error) {
-    logger.error('Error fetching categories:', error);
-    throw error;
+export const searchProviders = async (query, category, pageValue, limitValue) => {
+  const { page, limit } = parsePagination(pageValue, limitValue);
+  const normalizedQuery = typeof query === 'string' ? query.trim().slice(0, 100) : '';
+  const result = await providerRepository.searchProvidersByText(normalizedQuery, { category, page, limit });
+  return { ...result, query: normalizedQuery };
+};
+
+export const getCategories = async () => providerRepository.listCategories();
+
+export const getFeaturedProviders = async (limitValue = 10) => {
+  const limit = Number.parseInt(limitValue, 10) || 10;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw new ValidationError('limit must be between 1 and 50');
   }
+  return providerRepository.listFeaturedProviders(limit);
+};
+
+export const saveProvider = async () => {
+  throw new AppError('Saved providers are unavailable until a favorites table is added', 501, 'NOT_IMPLEMENTED');
+};
+
+export const getSavedProviders = async () => {
+  throw new AppError('Saved providers are unavailable until a favorites table is added', 501, 'NOT_IMPLEMENTED');
 };
 
 export default {
   searchNearby,
   searchProviders,
-  getCategories
+  getCategories,
+  getFeaturedProviders,
+  saveProvider,
+  getSavedProviders
 };

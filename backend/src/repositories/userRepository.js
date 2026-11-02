@@ -3,153 +3,106 @@
  * Database operations for user profiles
  */
 
-import { supabase } from '../config/supabase.js';
-import logger from '../utils/logger.js';
+import { supabaseAdmin as supabase } from '../config/supabase.js';
 import { NotFoundError } from '../utils/errors.js';
 
 /**
  * Fetch user by ID
  */
 export const getUserById = async (userId) => {
-  try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single();
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .is('deleted_at', null)
+    .maybeSingle();
 
-    if (error) {
-      throw new NotFoundError('User not found');
-    }
-
-    return data;
-  } catch (error) {
-    logger.error('Error fetching user:', error);
-    throw error;
-  }
+  if (error) throw error;
+  if (!data) throw new NotFoundError('User not found');
+  return data;
 };
 
 /**
  * Create new user profile
  */
 export const createUser = async (userData) => {
-  try {
-    const { data, error } = await supabase
-      .from('users')
-      .insert([userData])
-      .select()
-      .single();
+  const { data, error } = await supabase
+    .from('users')
+    .insert(userData)
+    .select()
+    .single();
 
-    if (error) {
-      throw error;
-    }
-
-    return data;
-  } catch (error) {
-    logger.error('Error creating user:', error);
-    throw error;
-  }
+  if (error) throw error;
+  return data;
 };
 
 /**
  * Update user profile
  */
 export const updateUser = async (userId, updates) => {
-  try {
-    const { data, error } = await supabase
-      .from('users')
-      .update(updates)
-      .eq('id', userId)
-      .select()
-      .single();
+  const { data, error } = await supabase
+    .from('users')
+    .update(updates)
+    .eq('id', userId)
+    .is('deleted_at', null)
+    .select()
+    .maybeSingle();
 
-    if (error) {
-      throw error;
-    }
-
-    return data;
-  } catch (error) {
-    logger.error('Error updating user:', error);
-    throw error;
-  }
+  if (error) throw error;
+  if (!data) throw new NotFoundError('User not found');
+  return data;
 };
 
 /**
  * Delete user profile
  */
 export const deleteUser = async (userId) => {
-  try {
-    const { error } = await supabase
-      .from('users')
-      .delete()
-      .eq('id', userId);
-
-    if (error) {
-      throw error;
-    }
-
-    return { success: true };
-  } catch (error) {
-    logger.error('Error deleting user:', error);
-    throw error;
-  }
+  return updateUser(userId, {
+    is_active: false,
+    deleted_at: new Date().toISOString()
+  });
 };
 
 /**
  * Fetch user by email
  */
 export const getUserByEmail = async (email) => {
-  try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('email', email)
-      .single();
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('email', email)
+    .is('deleted_at', null)
+    .maybeSingle();
 
-    if (error) {
-      return null;
-    }
-
-    return data;
-  } catch (error) {
-    logger.error('Error fetching user by email:', error);
-    throw error;
-  }
+  if (error) throw error;
+  return data;
 };
 
 /**
  * List users with pagination and filtering
  */
 export const listUsers = async (filters = {}, page = 1, limit = 20) => {
-  try {
-    let query = supabase.from('users').select('*', { count: 'exact' });
+  let query = supabase
+    .from('users')
+    .select('id, email, phone_number, full_name, role, is_active, created_at, deleted_at', { count: 'exact' });
 
-    if (filters.role) {
-      query = query.eq('role', filters.role);
-    }
+  if (filters.role) query = query.eq('role', filters.role);
+  if (filters.status === 'active') query = query.eq('is_active', true).is('deleted_at', null);
+  if (filters.status === 'suspended') query = query.eq('is_active', false).is('deleted_at', null);
+  if (filters.status === 'deactivated') query = query.not('deleted_at', 'is', null);
 
-    if (filters.status) {
-      query = query.eq('status', filters.status);
-    }
+  const offset = (page - 1) * limit;
+  const { data, error, count } = await query
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
 
-    const offset = (page - 1) * limit;
-    const { data, error, count } = await query
-      .range(offset, offset + limit - 1);
-
-    if (error) {
-      throw error;
-    }
-
-    return {
-      data,
-      total: count,
-      page,
-      pages: Math.ceil(count / limit)
-    };
-  } catch (error) {
-    logger.error('Error listing users:', error);
-    throw error;
-  }
+  if (error) throw error;
+  return {
+    data: data || [],
+    total: count || 0,
+    page,
+    pages: Math.ceil((count || 0) / limit)
+  };
 };
 
 export default {

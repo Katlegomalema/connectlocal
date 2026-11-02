@@ -4,21 +4,32 @@
  */
 
 import express from 'express';
+import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validation.js';
+import * as bookingService from '../services/bookingService.js';
 
 const router = express.Router();
+const createBookingSchema = z.object({
+  providerId: z.string().min(1),
+  serviceId: z.string().min(1),
+  scheduledStart: z.string().min(1),
+  notes: z.string().max(2000).optional()
+});
+const rescheduleSchema = z.object({ scheduledStart: z.string().min(1) });
+const reasonSchema = z.object({ reason: z.string().max(1000).optional() });
 
 /**
  * POST /api/v1/bookings
  * Create a new booking
  */
-router.post('/', verifyToken, asyncHandler(async (req, res) => {
-  // Implementation: Call booking service
+router.post('/', verifyToken, validateBody(createBookingSchema), asyncHandler(async (req, res) => {
+  const booking = await bookingService.createBooking(req.user, req.validatedBody);
   res.status(201).json({
     success: true,
     message: 'Booking created successfully',
-    data: { /* booking data */ }
+    data: booking
   });
 }));
 
@@ -27,10 +38,10 @@ router.post('/', verifyToken, asyncHandler(async (req, res) => {
  * Fetch booking details
  */
 router.get('/:id', verifyToken, asyncHandler(async (req, res) => {
-  // Implementation: Call booking service
+  const booking = await bookingService.getBooking(req.user, req.params.id);
   res.status(200).json({
     success: true,
-    data: { /* booking data */ }
+    data: booking
   });
 }));
 
@@ -38,12 +49,16 @@ router.get('/:id', verifyToken, asyncHandler(async (req, res) => {
  * PUT /api/v1/bookings/:id
  * Update booking (reschedule)
  */
-router.put('/:id', verifyToken, asyncHandler(async (req, res) => {
-  // Implementation: Call booking service
+router.put('/:id', verifyToken, validateBody(rescheduleSchema), asyncHandler(async (req, res) => {
+  const booking = await bookingService.rescheduleBooking(
+    req.user,
+    req.params.id,
+    req.validatedBody.scheduledStart
+  );
   res.status(200).json({
     success: true,
     message: 'Booking updated successfully',
-    data: { /* updated booking data */ }
+    data: booking
   });
 }));
 
@@ -52,11 +67,11 @@ router.put('/:id', verifyToken, asyncHandler(async (req, res) => {
  * Provider accepts a booking request
  */
 router.post('/:id/accept', verifyToken, asyncHandler(async (req, res) => {
-  // Implementation: Call booking service
+  const booking = await bookingService.acceptBooking(req.user, req.params.id);
   res.status(200).json({
     success: true,
     message: 'Booking accepted',
-    data: { /* booking data */ }
+    data: booking
   });
 }));
 
@@ -64,12 +79,12 @@ router.post('/:id/accept', verifyToken, asyncHandler(async (req, res) => {
  * POST /api/v1/bookings/:id/decline
  * Provider declines a booking request
  */
-router.post('/:id/decline', verifyToken, asyncHandler(async (req, res) => {
-  // Implementation: Call booking service
+router.post('/:id/decline', verifyToken, validateBody(reasonSchema), asyncHandler(async (req, res) => {
+  const booking = await bookingService.declineBooking(req.user, req.params.id, req.validatedBody.reason);
   res.status(200).json({
     success: true,
     message: 'Booking declined',
-    data: { /* booking data */ }
+    data: booking
   });
 }));
 
@@ -77,13 +92,18 @@ router.post('/:id/decline', verifyToken, asyncHandler(async (req, res) => {
  * POST /api/v1/bookings/:id/cancel
  * Cancel a booking
  */
-router.post('/:id/cancel', verifyToken, asyncHandler(async (req, res) => {
-  // Implementation: Call booking service
+router.post('/:id/cancel', verifyToken, validateBody(reasonSchema), asyncHandler(async (req, res) => {
+  const booking = await bookingService.cancelBooking(req.user, req.params.id, req.validatedBody.reason);
   res.status(200).json({
     success: true,
     message: 'Booking cancelled',
-    data: { /* booking data */ }
+    data: booking
   });
+}));
+
+router.post('/:id/start', verifyToken, asyncHandler(async (req, res) => {
+  const booking = await bookingService.startBooking(req.user, req.params.id);
+  res.status(200).json({ success: true, message: 'Booking started', data: booking });
 }));
 
 /**
@@ -91,11 +111,11 @@ router.post('/:id/cancel', verifyToken, asyncHandler(async (req, res) => {
  * Mark booking as completed
  */
 router.post('/:id/complete', verifyToken, asyncHandler(async (req, res) => {
-  // Implementation: Call booking service
+  const booking = await bookingService.completeBooking(req.user, req.params.id);
   res.status(200).json({
     success: true,
     message: 'Booking marked as completed',
-    data: { /* booking data */ }
+    data: booking
   });
 }));
 
@@ -105,15 +125,10 @@ router.post('/:id/complete', verifyToken, asyncHandler(async (req, res) => {
  * Query params: status, page, limit
  */
 router.get('/', verifyToken, asyncHandler(async (req, res) => {
-  // Implementation: Call booking service
+  const result = await bookingService.listBookings(req.user, req.query);
   res.status(200).json({
     success: true,
-    data: {
-      bookings: [ /* booking array */ ],
-      total: 0,
-      page: 1,
-      pages: 0
-    }
+    data: result
   });
 }));
 

@@ -5,7 +5,8 @@
 
 import express from 'express';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { optionalToken } from '../middleware/auth.js';
+import { optionalToken, verifyToken } from '../middleware/auth.js';
+import * as searchService from '../services/searchService.js';
 
 const router = express.Router();
 
@@ -15,13 +16,19 @@ const router = express.Router();
  * Query params: latitude, longitude, radius, category, minRating, maxPrice
  */
 router.get('/nearby', optionalToken, asyncHandler(async (req, res) => {
-  // Implementation: Call search service
+  const result = await searchService.searchNearby(
+    req.query.latitude,
+    req.query.longitude,
+    req.query.radius,
+    {
+      category: req.query.category,
+      minRating: req.query.minRating,
+      maxPrice: req.query.maxPrice
+    }
+  );
   res.status(200).json({
     success: true,
-    data: {
-      providers: [ /* provider data */ ],
-      count: 0
-    }
+    data: result
   });
 }));
 
@@ -31,15 +38,15 @@ router.get('/nearby', optionalToken, asyncHandler(async (req, res) => {
  * Query params: q, category, page, limit
  */
 router.get('/providers', optionalToken, asyncHandler(async (req, res) => {
-  // Implementation: Call search service
+  const result = await searchService.searchProviders(
+    req.query.q,
+    req.query.category,
+    req.query.page,
+    req.query.limit
+  );
   res.status(200).json({
     success: true,
-    data: {
-      providers: [ /* provider data */ ],
-      total: 0,
-      page: 1,
-      pages: 0
-    }
+    data: result
   });
 }));
 
@@ -48,15 +55,10 @@ router.get('/providers', optionalToken, asyncHandler(async (req, res) => {
  * Get all available service categories
  */
 router.get('/categories', asyncHandler(async (req, res) => {
-  // Implementation: Call search service
+  const categories = await searchService.getCategories();
   res.status(200).json({
     success: true,
-    data: {
-      categories: [
-        { id: 'plumbing', name: 'Plumbing', icon: '...' },
-        // ... more categories
-      ]
-    }
+    data: { categories }
   });
 }));
 
@@ -65,10 +67,10 @@ router.get('/categories', asyncHandler(async (req, res) => {
  * Get featured/recommended providers
  */
 router.get('/featured', asyncHandler(async (req, res) => {
-  // Implementation: Call search service
+  const providers = await searchService.getFeaturedProviders(req.query.limit);
   res.status(200).json({
     success: true,
-    data: { /* featured providers */ }
+    data: { providers }
   });
 }));
 
@@ -76,8 +78,8 @@ router.get('/featured', asyncHandler(async (req, res) => {
  * POST /api/v1/search/saved
  * Save a provider to user's favorites
  */
-router.post('/saved', asyncHandler(async (req, res) => {
-  // Implementation: Call search service
+router.post('/saved', verifyToken, asyncHandler(async (req, res) => {
+  await searchService.saveProvider(req.user, req.body.providerId);
   res.status(201).json({
     success: true,
     message: 'Provider saved successfully'
@@ -88,11 +90,11 @@ router.post('/saved', asyncHandler(async (req, res) => {
  * GET /api/v1/search/saved
  * Get user's saved providers
  */
-router.get('/saved', asyncHandler(async (req, res) => {
-  // Implementation: Call search service
+router.get('/saved', verifyToken, asyncHandler(async (req, res) => {
+  const providers = await searchService.getSavedProviders(req.user);
   res.status(200).json({
     success: true,
-    data: { /* saved providers */ }
+    data: { providers }
   });
 }));
 

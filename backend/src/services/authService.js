@@ -1,201 +1,114 @@
 /**
  * Auth Service
- * Wraps Supabase auth operations and business logic
+ * Supabase Auth flows and application-profile synchronization
  */
 
-import { supabase } from '../config/supabase.js';
-import logger from '../utils/logger.js';
+import { supabase, supabaseAdmin } from '../config/supabase.js';
+import * as userRepository from '../repositories/userRepository.js';
 import { AuthenticationError, ValidationError } from '../utils/errors.js';
 
-/**
- * Register user with email and password
- */
+const profileForAuthUser = (authUser) => userRepository.getUserById(authUser.id);
+
 export const registerUser = async (email, password, userData) => {
+  if (!['customer', 'provider'].includes(userData.role)) {
+    throw new ValidationError('Role must be customer or provider');
+  }
+
+  const fullName = `${userData.firstName || ''} ${userData.lastName || ''}`.trim();
+  if (fullName.length < 2 || fullName.length > 150) {
+    throw new ValidationError('A valid first and last name are required');
+  }
+
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { data: { full_name: fullName } }
+  });
+  if (error) throw new AuthenticationError(error.message);
+  if (!data.user) throw new AuthenticationError('User registration failed');
+
   try {
-    logger.info(`Registering user: ${email}`);
-
-    // Sign up with Supabase Auth
-    const { data, error } = await supabase.auth.signUpWithPassword({
-      email,
-      password,
-      options: {
-        data: userData
-      }
+    const profile = await userRepository.createUser({
+      id: data.user.id,
+      email: data.user.email,
+      full_name: fullName,
+      phone_number: userData.phone || null,
+      role: userData.role,
+        email_verified: Boolean(data.user.email_confirmed_at),
+        phone_verified: false,
+        is_active: true
     });
-
-    if (error) {
-      throw new AuthenticationError(error.message);
-    }
-
-    // Create user profile in database
-    // await createUserProfile(data.user.id, userData);
-
-    return data.user;
-  } catch (error) {
-    logger.error('User registration error:', error);
-    throw error;
+    return { ...data.user, application_profile: profile };
+  } catch (profileError) {
+    await supabaseAdmin.auth.admin.deleteUser(data.user.id);
+    throw profileError;
   }
 };
 
-/**
- * Login user with email and password
- */
 export const loginUser = async (email, password) => {
-  try {
-    logger.info(`Attempting login for: ${email}`);
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error || !data.user || !data.session) throw new AuthenticationError('Invalid email or password');
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    if (error) {
-      throw new AuthenticationError('Invalid email or password');
-    }
-
-    return {
-      user: data.user,
-      session: data.session
-    };
-  } catch (error) {
-    logger.error('Login error:', error);
-    throw error;
-  }
+  const profile = await profileForAuthUser(data.user);
+    if (!profile.is_active || profile.deleted_at) throw new AuthenticationError('This account is not active');
+  return { user: profile, session: data.session };
 };
 
-/**
- * Refresh session
- */
 export const refreshSession = async (refreshToken) => {
-  try {
-    logger.info('Refreshing session');
+  const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
+  if (error || !data.user || !data.session) throw new AuthenticationError('Unable to refresh session');
 
-    const { data, error } = await supabase.auth.refreshSession({
-      refresh_token: refreshToken
-    });
-
-    if (error) {
-      throw new AuthenticationError('Unable to refresh session');
-    }
-
-    return {
-      user: data.user,
-      session: data.session
-    };
-  } catch (error) {
-    logger.error('Session refresh error:', error);
-    throw error;
-  }
+  const profile = await profileForAuthUser(data.user);
+    if (!profile.is_active || profile.deleted_at) throw new AuthenticationError('This account is not active');
+  return { user: profile, session: data.session };
 };
 
-/**
- * Verify email
- */
 export const verifyUserEmail = async (token) => {
-  try {
-    logger.info('Verifying email');
-
-    const { data, error } = await supabase.auth.verifyOtp({
-      token_hash: token,
-      type: 'email'
-    });
-
-    if (error) {
-      throw new AuthenticationError('Invalid verification token');
-    }
-
-    return data.user;
-  } catch (error) {
-    logger.error('Email verification error:', error);
-    throw error;
-  }
+  const { data, error } = await supabase.auth.verifyOtp({ token_hash: token, type: 'email' });
+  if (error || !data.user) throw new AuthenticationError('Invalid verification token');
+    await userRepository.updateUser(data.user.id, { email_verified: true });
+  return data.user;
 };
 
-/**
- * Send password reset email
- */
 export const sendPasswordResetEmail = async (email) => {
-  try {
-    logger.info(`Sending password reset email to: ${email}`);
-
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
-
-    if (error) {
-      throw new AuthenticationError(error.message);
-    }
-
-    return { success: true };
-  } catch (error) {
-    logger.error('Password reset email error:', error);
-    throw error;
-  }
+  const redirectTo = process.env.PASSWORD_RESET_REDIRECT_URL;
+  const { error } = await supabase.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined);
+  if (error) throw new AuthenticationError('Unable to request password reset');
+  return { success: true };
 };
 
-/**
- * Update password with reset token
- */
 export const updatePasswordWithToken = async (password, token) => {
-  try {
-    logger.info('Updating password with token');
-
-    const { data, error } = await supabase.auth.updateUser({
-      password,
-      nonce: token
-    });
-
-    if (error) {
-      throw new AuthenticationError(error.message);
-    }
-
-    return data.user;
-  } catch (error) {
-    logger.error('Password update error:', error);
-    throw error;
-  }
+  const { data, error } = await supabase.auth.verifyOtp({ token_hash: token, type: 'recovery' });
+  if (error || !data.user) throw new AuthenticationError('Invalid or expired password reset token');
+  const { data: updated, error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
+    data.user.id,
+    { password }
+  );
+  if (updateError) throw new AuthenticationError('Unable to update password');
+  return updated.user;
 };
 
-/**
- * Logout user
- */
-export const logoutUser = async (userId) => {
-  try {
-    logger.info(`Logging out user: ${userId}`);
-
-    const { error } = await supabase.auth.signOut();
-
-    if (error) {
-      throw new AuthenticationError(error.message);
-    }
-
-    return { success: true };
-  } catch (error) {
-    logger.error('Logout error:', error);
-    throw error;
-  }
+export const logoutUser = async (accessToken) => {
+  if (!accessToken) throw new AuthenticationError('Access token is required');
+  const { error } = await supabaseAdmin.auth.admin.signOut(accessToken, 'global');
+  if (error) throw new AuthenticationError('Unable to revoke session');
+  return { success: true };
 };
 
-/**
- * Verify phone with OTP
- */
+export const sendPhoneOtp = async (phone) => {
+  const { error } = await supabase.auth.signInWithOtp({
+    phone,
+    options: { shouldCreateUser: false }
+  });
+  if (error) throw new AuthenticationError('Unable to send phone verification code');
+  return { success: true };
+};
+
 export const verifyPhoneWithOtp = async (phone, otp) => {
-  try {
-    logger.info(`Verifying phone: ${phone}`);
-
-    const { data, error } = await supabase.auth.verifyOtp({
-      phone,
-      token: otp,
-      type: 'sms'
-    });
-
-    if (error) {
-      throw new AuthenticationError(error.message);
-    }
-
-    return data.user;
-  } catch (error) {
-    logger.error('Phone verification error:', error);
-    throw error;
-  }
+  const { data, error } = await supabase.auth.verifyOtp({ phone, token: otp, type: 'sms' });
+  if (error || !data.user) throw new AuthenticationError('Invalid phone verification code');
+    await userRepository.updateUser(data.user.id, { phone_number: phone, phone_verified: true });
+  return data.user;
 };
 
 export default {
@@ -206,5 +119,6 @@ export default {
   sendPasswordResetEmail,
   updatePasswordWithToken,
   logoutUser,
+  sendPhoneOtp,
   verifyPhoneWithOtp
 };

@@ -4,10 +4,14 @@
  */
 
 import express from 'express';
+import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken, requireRole } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validation.js';
+import * as adminService from '../services/adminService.js';
 
 const router = express.Router();
+const updateUserSchema = z.object({ status: z.enum(['active', 'suspended', 'deactivated']) }).strict();
 
 // Middleware: Ensure user is admin
 router.use(verifyToken, requireRole('admin'));
@@ -18,15 +22,10 @@ router.use(verifyToken, requireRole('admin'));
  * Query params: role, status, page, limit
  */
 router.get('/users', asyncHandler(async (req, res) => {
-  // Implementation: Call admin service
+  const result = await adminService.listUsers(req.user, req.query);
   res.status(200).json({
     success: true,
-    data: {
-      users: [ /* user array */ ],
-      total: 0,
-      page: 1,
-      pages: 0
-    }
+    data: result
   });
 }));
 
@@ -34,12 +33,12 @@ router.get('/users', asyncHandler(async (req, res) => {
  * PUT /api/v1/admin/users/:id
  * Update user account (suspend, activate, etc.)
  */
-router.put('/users/:id', asyncHandler(async (req, res) => {
-  // Implementation: Call admin service
+router.put('/users/:id', validateBody(updateUserSchema), asyncHandler(async (req, res) => {
+  const user = await adminService.updateUserAccount(req.user, req.params.id, req.validatedBody.status);
   res.status(200).json({
     success: true,
     message: 'User updated successfully',
-    data: { /* user data */ }
+    data: { user }
   });
 }));
 
@@ -49,10 +48,10 @@ router.put('/users/:id', asyncHandler(async (req, res) => {
  * Query params: page, limit
  */
 router.get('/providers/pending', asyncHandler(async (req, res) => {
-  // Implementation: Call admin service
+  const result = await adminService.listPendingProviders(req.user, req.query);
   res.status(200).json({
     success: true,
-    data: { /* pending providers array */ }
+    data: result
   });
 }));
 
@@ -61,11 +60,11 @@ router.get('/providers/pending', asyncHandler(async (req, res) => {
  * Approve a provider verification
  */
 router.post('/providers/:id/verify', asyncHandler(async (req, res) => {
-  // Implementation: Call admin service
+  const provider = await adminService.decideProviderVerification(req.user, req.params.id, 'approve');
   res.status(200).json({
     success: true,
     message: 'Provider verified successfully',
-    data: { /* provider data */ }
+    data: { provider }
   });
 }));
 
@@ -74,11 +73,11 @@ router.post('/providers/:id/verify', asyncHandler(async (req, res) => {
  * Reject a provider verification
  */
 router.post('/providers/:id/reject', asyncHandler(async (req, res) => {
-  // Implementation: Call admin service
+  const provider = await adminService.decideProviderVerification(req.user, req.params.id, 'reject');
   res.status(200).json({
     success: true,
     message: 'Provider verification rejected',
-    data: { /* provider data */ }
+    data: { provider }
   });
 }));
 
@@ -88,10 +87,10 @@ router.post('/providers/:id/reject', asyncHandler(async (req, res) => {
  * Query params: page, limit, status
  */
 router.get('/reviews', asyncHandler(async (req, res) => {
-  // Implementation: Call admin service
+  const result = await adminService.listReviews(req.user, req.query);
   res.status(200).json({
     success: true,
-    data: { /* flagged reviews array */ }
+    data: result
   });
 }));
 
@@ -100,11 +99,11 @@ router.get('/reviews', asyncHandler(async (req, res) => {
  * Hide a review
  */
 router.post('/reviews/:id/hide', asyncHandler(async (req, res) => {
-  // Implementation: Call admin service
+  const review = await adminService.hideReview(req.user, req.params.id);
   res.status(200).json({
     success: true,
     message: 'Review hidden',
-    data: { /* review data */ }
+    data: { review }
   });
 }));
 
@@ -114,16 +113,10 @@ router.post('/reviews/:id/hide', asyncHandler(async (req, res) => {
  * Query params: from, to, metrics
  */
 router.get('/analytics', asyncHandler(async (req, res) => {
-  // Implementation: Call admin service
+  const analytics = await adminService.getAnalytics(req.user);
   res.status(200).json({
     success: true,
-    data: {
-      totalUsers: 0,
-      totalProviders: 0,
-      totalBookings: 0,
-      totalRevenue: 0,
-      averageRating: 0
-    }
+    data: analytics
   });
 }));
 
@@ -133,11 +126,8 @@ router.get('/analytics', asyncHandler(async (req, res) => {
  * Query params: page, limit, status
  */
 router.get('/disputes', asyncHandler(async (req, res) => {
-  // Implementation: Call admin service
-  res.status(200).json({
-    success: true,
-    data: { /* disputes array */ }
-  });
+  const disputes = await adminService.listDisputes(req.user, req.query);
+  res.status(200).json({ success: true, data: disputes });
 }));
 
 /**
@@ -145,12 +135,8 @@ router.get('/disputes', asyncHandler(async (req, res) => {
  * Resolve a dispute
  */
 router.put('/disputes/:id', asyncHandler(async (req, res) => {
-  // Implementation: Call admin service
-  res.status(200).json({
-    success: true,
-    message: 'Dispute resolved',
-    data: { /* dispute data */ }
-  });
+  const dispute = await adminService.resolveDispute(req.user, req.params.id, req.body);
+  res.status(200).json({ success: true, message: 'Dispute resolved', data: dispute });
 }));
 
 export default router;

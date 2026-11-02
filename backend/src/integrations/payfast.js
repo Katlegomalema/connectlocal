@@ -5,28 +5,74 @@
 
 import axios from 'axios';
 import crypto from 'crypto';
+import { URLSearchParams } from 'url';
 import logger from '../utils/logger.js';
-import { ExternalServiceError, ValidationError } from '../utils/errors.js';
+import { ExternalServiceError } from '../utils/errors.js';
 
 const PAYFAST_MERCHANT_ID = process.env.PAYFAST_MERCHANT_ID;
 const PAYFAST_MERCHANT_KEY = process.env.PAYFAST_MERCHANT_KEY;
 const PAYFAST_API_KEY = process.env.PAYFAST_API_KEY;
 const PAYFAST_PASSPHRASE = process.env.PAYFAST_PASSPHRASE;
 
-// PayFast endpoints
 const SANDBOX_URL = 'https://sandbox.payfast.co.za';
 const LIVE_URL = 'https://www.payfast.co.za';
 const API_URL = process.env.NODE_ENV === 'production' ? LIVE_URL : SANDBOX_URL;
+const VALIDATION_URL = `${API_URL}/eng/query/validate`;
 
-/**
- * Generate PayFast signature
- */
-const generateSignature = (data) => {
-  const signature = crypto
-    .createHash('md5')
-    .update(data)
-    .digest('hex');
-  return signature;
+const assertPayFastConfig = () => {
+  if (!PAYFAST_MERCHANT_ID || !PAYFAST_MERCHANT_KEY || !PAYFAST_PASSPHRASE) {
+    throw new ExternalServiceError('PayFast merchant configuration is missing', 'payfast');
+  }
+};
+
+const encodePayFastValue = (value) => encodeURIComponent(String(value).trim()).replace(/%20/g, '+');
+
+const generateSignature = (payload) => {
+  const fields = Object.entries(payload)
+    .filter(([key, value]) => key !== 'signature' && value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${key}=${encodePayFastValue(value)}`);
+
+  if (PAYFAST_PASSPHRASE) fields.push(`passphrase=${encodePayFastValue(PAYFAST_PASSPHRASE)}`);
+  return crypto.createHash('md5').update(fields.join('&')).digest('hex');
+};
+
+const isAllowedSource = (sourceIp) => {
+  const allowedIps = (process.env.PAYFAST_ALLOWED_IPS || '').split(',').map((ip) => ip.trim()).filter(Boolean);
+  const normalizedIp = (sourceIp || '').replace(/^::ffff:/, '').split('%')[0];
+  return allowedIps.includes(normalizedIp);
+};
+
+export const verifyItn = async (notification, sourceIp) => {
+  if (!PAYFAST_MERCHANT_ID || !notification || typeof notification !== 'object') return false;
+  if (!isAllowedSource(sourceIp)) {
+    logger.warn('Rejected PayFast ITN from unconfigured source address');
+    return false;
+  }
+
+  const providedSignature = notification.signature;
+  const expectedSignature = generateSignature(notification);
+  if (typeof providedSignature !== 'string'
+      || providedSignature.length !== expectedSignature.length
+      || !crypto.timingSafeEqual(Buffer.from(providedSignature), Buffer.from(expectedSignature))) {
+    logger.warn('Rejected PayFast ITN with invalid signature');
+    return false;
+  }
+  if (notification.merchant_id !== PAYFAST_MERCHANT_ID) return false;
+
+  try {
+    const form = new URLSearchParams();
+    for (const [key, value] of Object.entries(notification)) {
+      if (value !== undefined && value !== null) form.append(key, String(value));
+    }
+    const response = await axios.post(VALIDATION_URL, form.toString(), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: 10000
+    });
+    return response.data?.toString().trim() === 'VALID';
+  } catch (error) {
+    logger.error('PayFast ITN server validation failed:', error?.response?.data || error.message);
+    throw new ExternalServiceError('Unable to validate PayFast notification', 'payfast');
+  }
 };
 
 /**
@@ -34,11 +80,17 @@ const generateSignature = (data) => {
  */
 export const createPayment = async (paymentData) => {
   try {
+    assertPayFastConfig();
+
     logger.info('Creating PayFast payment', { amount: paymentData.amount });
+
+    if (!paymentData.return_url || !paymentData.cancel_url || !paymentData.notify_url
+        || !paymentData.email || !paymentData.item_name || !paymentData.reference) {
+      throw new ExternalServiceError('Required PayFast checkout details are missing', 'payfast');
+    }
 
     const payload = {
       merchant_id: PAYFAST_MERCHANT_ID,
-      merchant_key: PAYFAST_MERCHANT_KEY,
       return_url: paymentData.return_url,
       cancel_url: paymentData.cancel_url,
       notify_url: paymentData.notify_url,
@@ -47,25 +99,18 @@ export const createPayment = async (paymentData) => {
       email_address: paymentData.email,
       item_name: paymentData.item_name,
       item_description: paymentData.item_description,
-      amount: paymentData.amount.toFixed(2),
-      custom_int1: paymentData.booking_id,
+      amount: Number(paymentData.amount).toFixed(2),
       custom_str1: paymentData.reference
     };
 
-    // Generate signature
-    const signatureString = Object.keys(payload)
-      .sort()
-      .map(key => `${key}=${encodeURIComponent(payload[key])}`)
-      .join('&');
-
-    payload.signature = generateSignature(signatureString);
+    payload.signature = generateSignature(payload);
 
     return {
       url: `${API_URL}/eng/process`,
       payload
     };
   } catch (error) {
-    logger.error('PayFast payment creation error:', error);
+    logger.error('PayFast payment creation error:', error?.message || error);
     throw new ExternalServiceError('Failed to create payment', 'payfast');
   }
 };
@@ -75,6 +120,7 @@ export const createPayment = async (paymentData) => {
  */
 export const verifyPayment = async (paymentId) => {
   try {
+    assertPayFastConfig();
     logger.info('Verifying PayFast payment', { paymentId });
 
     const response = await axios.post(
@@ -87,14 +133,15 @@ export const verifyPayment = async (paymentId) => {
           return_url: paymentId
         },
         headers: {
-          'Authorization': `Bearer ${PAYFAST_API_KEY}`
-        }
+          Authorization: `Bearer ${PAYFAST_API_KEY || ''}`
+        },
+        timeout: 10000
       }
     );
 
     return response.data;
   } catch (error) {
-    logger.error('PayFast verification error:', error);
+    logger.error('PayFast verification error:', error?.response?.data || error.message);
     throw new ExternalServiceError('Failed to verify payment', 'payfast');
   }
 };
@@ -104,6 +151,7 @@ export const verifyPayment = async (paymentId) => {
  */
 export const processRefund = async (transactionId, amount) => {
   try {
+    assertPayFastConfig();
     logger.info('Processing PayFast refund', { transactionId, amount });
 
     const response = await axios.post(
@@ -116,20 +164,22 @@ export const processRefund = async (transactionId, amount) => {
           transaction_id: transactionId
         },
         headers: {
-          'Authorization': `Bearer ${PAYFAST_API_KEY}`
-        }
+          Authorization: `Bearer ${PAYFAST_API_KEY || ''}`
+        },
+        timeout: 10000
       }
     );
 
     return response.data;
   } catch (error) {
-    logger.error('PayFast refund error:', error);
+    logger.error('PayFast refund error:', error?.response?.data || error.message);
     throw new ExternalServiceError('Failed to process refund', 'payfast');
   }
 };
 
 export default {
   createPayment,
+  verifyItn,
   verifyPayment,
   processRefund
 };

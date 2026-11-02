@@ -11,23 +11,32 @@ const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 const PLACES_API_URL = 'https://maps.googleapis.com/maps/api/place';
 const GEOCODING_API_URL = 'https://maps.googleapis.com/maps/api/geocode';
 
+const assertMapsConfig = () => {
+  if (!GOOGLE_MAPS_API_KEY) {
+    throw new ExternalServiceError('Google Maps API key is missing', 'google-maps');
+  }
+};
+
 /**
  * Search nearby places
  */
 export const searchNearbyPlaces = async (latitude, longitude, type, radiusMeters = 5000) => {
   try {
+    assertMapsConfig();
+
     const response = await axios.get(`${PLACES_API_URL}/nearbysearch/json`, {
       params: {
         location: `${latitude},${longitude}`,
         radius: radiusMeters,
         type,
         key: GOOGLE_MAPS_API_KEY
-      }
+      },
+      timeout: 10000
     });
 
     return response.data.results || [];
   } catch (error) {
-    logger.error('Google Places API error:', error);
+    logger.error('Google Places API error:', error?.response?.data || error.message);
     throw new ExternalServiceError('Failed to search nearby places', 'google-maps');
   }
 };
@@ -37,21 +46,24 @@ export const searchNearbyPlaces = async (latitude, longitude, type, radiusMeters
  */
 export const geocodeAddress = async (address) => {
   try {
+    assertMapsConfig();
+
     const response = await axios.get(`${GEOCODING_API_URL}/json`, {
       params: {
         address,
         key: GOOGLE_MAPS_API_KEY
-      }
+      },
+      timeout: 10000
     });
 
-    if (response.data.results.length === 0) {
+    if (!response.data.results || response.data.results.length === 0) {
       return null;
     }
 
     const { lat, lng } = response.data.results[0].geometry.location;
     return { latitude: lat, longitude: lng };
   } catch (error) {
-    logger.error('Google Geocoding API error:', error);
+    logger.error('Google Geocoding API error:', error?.response?.data || error.message);
     throw new ExternalServiceError('Failed to geocode address', 'google-maps');
   }
 };
@@ -61,17 +73,20 @@ export const geocodeAddress = async (address) => {
  */
 export const getDistanceMatrix = async (origins, destinations) => {
   try {
+    assertMapsConfig();
+
     const response = await axios.get('https://maps.googleapis.com/maps/api/distancematrix/json', {
       params: {
         origins: origins.join('|'),
         destinations: destinations.join('|'),
         key: GOOGLE_MAPS_API_KEY
-      }
+      },
+      timeout: 10000
     });
 
-    return response.data.rows;
+    return response.data.rows || [];
   } catch (error) {
-    logger.error('Google Distance Matrix API error:', error);
+    logger.error('Google Distance Matrix API error:', error?.response?.data || error.message);
     throw new ExternalServiceError('Failed to get distance matrix', 'google-maps');
   }
 };

@@ -19,6 +19,7 @@ import messageRoutes from './routes/message.js';
 import reviewRoutes from './routes/review.js';
 import paymentRoutes from './routes/payment.js';
 import adminRoutes from './routes/admin.js';
+import notificationRoutes from './routes/notification.js';
 
 const app = express();
 
@@ -59,6 +60,7 @@ app.use('/api/v1/messages', messageRoutes);
 app.use('/api/v1/reviews', reviewRoutes);
 app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/admin', adminRoutes);
+app.use('/api/v1/notifications', notificationRoutes);
 
 // Middleware: 404 handler
 app.use(notFoundHandler);

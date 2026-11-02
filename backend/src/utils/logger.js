@@ -9,15 +9,6 @@ const logLevel = process.env.LOG_LEVEL || 'info';
 
 const logger = pino({
   level: logLevel,
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      colorize: true,
-      translateTime: 'SYS:standard',
-      ignore: 'pid,hostname',
-      singleLine: false
-    }
-  },
   formatters: {
     level: (label) => {
       return { level: label.toUpperCase() };
