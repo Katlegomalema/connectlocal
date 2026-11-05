@@ -144,3 +144,12 @@ bool bankNameMatches(String holder, {required String personName, String business
   if (biz.isNotEmpty && biz.every(h.contains)) return true;
   return false;
 }
+
+/// A business name needs at least one letter and may contain letters (any language), digits, spaces and
+/// & . , ' ( ) - (e.g. "Pat's Plumbing (Pty) Ltd"). The backend applies the same rule.
+bool isValidBusinessName(String value) {
+  final name = value.trim();
+  return name.length >= 2 &&
+      name.length <= 150 &&
+      RegExp(r"^(?=.*\p{L})[\p{L}\p{N}\s&.,'()\-]+$", unicode: true).hasMatch(name);
+}

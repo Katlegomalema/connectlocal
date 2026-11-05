@@ -47,6 +47,15 @@ const assertRegistrationNumberFree = async (registrationNumber, exceptProviderId
   }
 };
 
+/** At least one letter; letters, digits, spaces and & . , ' ( ) - only (same rule as the app). */
+export const BUSINESS_NAME = /^(?=.*\p{L})[\p{L}\p{N}\s&.,'()-]+$/u;
+
+const assertBusinessName = (name) => {
+  if (!name || name.length < 2 || name.length > 150 || !BUSINESS_NAME.test(name)) {
+    throw new ValidationError('Please enter a valid business name (letters, digits, spaces and & . , \' ( ) - only)');
+  }
+};
+
 const isUuid = (value) => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
 
 const resolveCategoryId = async (value) => {
@@ -159,9 +168,7 @@ export const registerProvider = async (actor, input) => {
   const businessName = input.businessName?.trim();
   const radius = input.serviceAreaRadiusKm ?? input.serviceRadiusKm ?? 10;
 
-  if (!businessName || businessName.length < 2 || businessName.length > 150) {
-    throw new ValidationError('businessName must contain between 2 and 150 characters');
-  }
+  assertBusinessName(businessName);
   for (const [field, limit] of [['streetAddress', 150], ['suburb', 100], ['city', 100], ['province', 100], ['postalCode', 20]]) {
     if (input[field] != null && (typeof input[field] !== 'string' || input[field].trim().length > limit)) {
       throw new ValidationError(`${field} must be a string of at most ${limit} characters`);
@@ -394,9 +401,7 @@ export const updateProviderProfile = async (actor, providerId, input) => {
   for (const [inputField, dbField] of Object.entries(fieldMap)) {
     if (input[inputField] === undefined) continue;
     const value = input[inputField];
-    if (inputField === 'businessName' && (typeof value !== 'string' || value.trim().length < 2 || value.length > 150)) {
-      throw new ValidationError('businessName must contain between 2 and 150 characters');
-    }
+    if (inputField === 'businessName') assertBusinessName(typeof value === 'string' ? value.trim() : '');
     if (inputField === 'description' && (typeof value !== 'string' || value.length > 5000)) {
       throw new ValidationError('description cannot exceed 5000 characters');
     }
