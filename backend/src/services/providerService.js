@@ -7,6 +7,7 @@ import * as providerRepository from '../repositories/providerRepository.js';
 import * as notificationService from './notificationService.js';
 import * as storage from '../integrations/storage.js';
 import logger from '../utils/logger.js';
+import { toLatLng } from '../utils/geo.js';
 import {
   AuthorizationError, ConflictError, NotFoundError, ValidationError
 } from '../utils/errors.js';
@@ -60,18 +61,8 @@ const locationValue = (location) => {
   return `SRID=4326;POINT(${longitude} ${latitude})`;
 };
 
-const publicLocation = (location) => {
-  const coordinates = location?.coordinates;
-  if (Array.isArray(coordinates) && coordinates.length >= 2) {
-    return { latitude: coordinates[1], longitude: coordinates[0] };
-  }
-  if (typeof location === 'string') {
-    const number = '-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?';
-    const point = location.match(new RegExp(`POINT\\s*\\(\\s*(${number})\\s+(${number})\\s*\\)`, 'i'));
-    if (point) return { latitude: Number(point[2]), longitude: Number(point[1]) };
-  }
-  return location ?? null;
-};
+/** { latitude, longitude } or null, whatever format PostGIS/PostgREST returned. */
+export const publicLocation = (location) => toLatLng(location);
 
 const assertProviderOwner = (actor, provider) => {
   if (actor.role !== 'admin' && (actor.role !== 'provider' || provider.user_id !== actor.id)) {

@@ -159,7 +159,10 @@ router.get('/search', optionalToken, asyncHandler(async (req, res) => {
 
 router.get('/me', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {
   const provider = await providerService.getOwnProvider(req.user);
-  res.status(200).json({ success: true, data: { provider } });
+  res.status(200).json({
+    success: true,
+    data: { provider: { ...provider, location: providerService.publicLocation(provider.location) } }
+  });
 }));
 
 router.patch('/me', verifyToken, requireRole('provider'), validateBody(providerUpdateSchema), asyncHandler(async (req, res) => {

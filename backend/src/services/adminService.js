@@ -10,6 +10,7 @@ import * as reviewService from './reviewService.js';
 import * as notificationService from './notificationService.js';
 import * as storage from '../integrations/storage.js';
 import logger from '../utils/logger.js';
+import { toLatLng } from '../utils/geo.js';
 import { AuthorizationError, ValidationError } from '../utils/errors.js';
 
 const requireAdmin = (actor) => {
@@ -71,10 +72,7 @@ const documentForAdmin = async (document) => ({
   urlExpiresInSeconds: document.storage_path ? 600 : null
 });
 
-const pointToLatLng = (location) => {
-  const coordinates = location?.coordinates;
-  return Array.isArray(coordinates) ? { latitude: coordinates[1], longitude: coordinates[0] } : null;
-};
+const pointToLatLng = (location) => toLatLng(location);
 
 export const listPendingProviders = async (actor, filters = {}) => {
   requireAdmin(actor);

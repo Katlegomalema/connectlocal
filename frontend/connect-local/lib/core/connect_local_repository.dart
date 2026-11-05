@@ -228,10 +228,13 @@ class ConnectLocalRepository {
     }
     if (_categoryNames.isEmpty) await categories();
     final services = ApiClient.dataOf(await api.get('/providers/me/services'))['services'] as List? ?? const [];
-    // PostGIS point as GeoJSON: {"type":"Point","coordinates":[lng, lat]}
-    final coordinates = (provider['location'] as Map?)?['coordinates'];
+    // The API answers {"latitude": .., "longitude": ..} (older answers: GeoJSON coordinates [lng, lat]).
+    final location = provider['location'];
+    final coordinates = location is Map ? location['coordinates'] : null;
     return providerFromJson({
       ...provider,
+      if (location is Map && location['latitude'] != null) 'latitude': location['latitude'],
+      if (location is Map && location['longitude'] != null) 'longitude': location['longitude'],
       if (coordinates is List && coordinates.length >= 2) 'latitude': coordinates[1],
       if (coordinates is List && coordinates.length >= 2) 'longitude': coordinates[0],
       'services': services,

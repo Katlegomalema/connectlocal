@@ -4,6 +4,7 @@
  */
 
 import * as providerRepository from '../repositories/providerRepository.js';
+import { toLatLng } from '../utils/geo.js';
 import { AuthorizationError, NotFoundError, ValidationError } from '../utils/errors.js';
 
 const parsePagination = (pageValue, limitValue) => {
@@ -15,10 +16,7 @@ const parsePagination = (pageValue, limitValue) => {
   return { page, limit };
 };
 
-const pointToLatLng = (location) => {
-  const coordinates = location?.coordinates;
-  return Array.isArray(coordinates) ? { latitude: coordinates[1], longitude: coordinates[0] } : {};
-};
+const pointToLatLng = (location) => toLatLng(location) || {};
 
 /**
  * What a listing card needs: active services (with active packages), a photo and coordinates.
