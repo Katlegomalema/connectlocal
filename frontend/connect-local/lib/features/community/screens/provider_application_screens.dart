@@ -195,9 +195,22 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
       );
       return;
     }
-    void warn(String m) =>
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(m)));
-    final regProblem = checkRegistrationNumber(_regNumber.text);
+   void warn(String m) =>
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 3),
+        content: Text(m),
+      ),
+    );
+
+final businessName = _name.text.trim();
+
+if (!RegExp(r'^(?=.*[A-Za-z])[A-Za-z0-9\s&.-]+$')
+    .hasMatch(businessName)) {
+  return warn('Please enter a valid business name');
+}
+
+final regProblem = checkRegistrationNumber(_regNumber.text);
     if (regProblem != null) return warn(regProblem);
     final id = parseSaId(_idNumber.text);
     if (id == null) return warn('That South African ID number is not valid');
