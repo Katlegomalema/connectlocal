@@ -9,7 +9,7 @@ import { ConflictError, NotFoundError } from '../utils/errors.js';
 export const getBookingById = async (bookingId) => {
   const { data, error } = await supabase
     .from('bookings')
-    .select('id, customer_id, provider_id, status')
+    .select('id, customer_id, provider_id, status, balance_status')
     .eq('id', bookingId)
     .maybeSingle();
 
@@ -127,6 +127,7 @@ export const refreshProviderRating = async (providerId) => {
   const batchSize = 1000;
 
   while (true) {
+    // eslint-disable-next-line no-await-in-loop -- paging: each batch depends on the previous one
     const { data, error } = await supabase
       .from('reviews')
       .select('rating')

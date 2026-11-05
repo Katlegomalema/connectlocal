@@ -3,9 +3,9 @@
  * Persistent conversation messaging
  */
 
-import * as messageRepository from '../repositories/messageRepository.js';
-import { AuthorizationError, ConflictError, ValidationError } from '../utils/errors.js';
 import { randomUUID } from 'node:crypto';
+import * as messageRepository from '../repositories/messageRepository.js';
+import { AuthorizationError, ValidationError } from '../utils/errors.js';
 
 const requireParticipant = (actor, conversation) => {
   if (actor.id !== conversation.user_a_id && actor.id !== conversation.user_b_id) {

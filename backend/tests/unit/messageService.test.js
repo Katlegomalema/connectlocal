@@ -25,6 +25,7 @@ describe('Message service', () => {
   test('persists a message only for a conversation participant', async () => {
     repository.getConversationById.mockResolvedValue({
       id: 'conversation-1',
+      booking_id: null,
       user_a_id: 'customer-1',
       user_b_id: 'provider-1'
     });
@@ -32,15 +33,17 @@ describe('Message service', () => {
 
     const result = await messageService.sendMessage(
       { id: 'customer-1', role: 'customer' },
-      'conversation-1',
+      { conversationId: 'conversation-1' },
       '  Hello  '
     );
 
     expect(repository.createMessage).toHaveBeenCalledWith({
       conversation_id: 'conversation-1',
+      booking_id: null,
       sender_id: 'customer-1',
-      body: 'Hello',
-      status: 'sent'
+      receiver_id: 'provider-1',
+      message_text: 'Hello',
+      is_read: false
     });
     expect(result.id).toBe('message-1');
   });
@@ -64,7 +67,8 @@ describe('Message service', () => {
       id: 'message-1',
       conversation_id: 'conversation-1',
       sender_id: 'customer-1',
-      status: 'sent'
+      receiver_id: 'provider-1',
+      is_read: false
     });
     repository.getConversationById.mockResolvedValue({
       id: 'conversation-1',
@@ -75,7 +79,7 @@ describe('Message service', () => {
     await expect(messageService.markAsRead(
       { id: 'customer-1', role: 'customer' },
       'message-1'
-    )).rejects.toMatchObject({ statusCode: 409 });
+    )).rejects.toMatchObject({ statusCode: 403 });
     expect(repository.updateMessageStatus).not.toHaveBeenCalled();
   });
 });

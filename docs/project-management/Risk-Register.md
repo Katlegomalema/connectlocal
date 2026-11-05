@@ -14,7 +14,7 @@ Covers technical, schedule, resource, and third-party dependency risks relevant 
 | ID | Risk | Category | Likelihood | Impact | Risk Score | Mitigation | Owner |
 |---|---|---|---|---|---|---|---|
 | R-01 | Team member unavailability (illness, competing coursework) | Resource | Medium | High | High | Cross-train on modules; maintain up-to-date documentation so any member can pick up a task | Project Lead |
-| R-02 | Third-party API quota/rate limits exceeded (Google Maps, Supabase free tier) | Technical | Medium | Medium | Medium | Monitor usage dashboards weekly; implement client-side caching to reduce call volume | Backend Developer |
+| R-02 | Third-party API quota/rate limits exceeded (Supabase free tier, PayFast sandbox) | Technical | Medium | Medium | Medium | Monitor usage dashboards weekly; use bounded database queries and client-side map-tile caching | Backend Developer |
 | R-03 | PayFast sandbox integration issues delaying payment module | Technical | Medium | Medium | Medium | Begin PayFast integration early (Sprint 7 buffer); maintain a mocked payment fallback for demo purposes | Backend Developer |
 | R-04 | Scope creep beyond academic timeline | Schedule | Medium | High | High | Enforce Scope Statement; new requests logged to Future Enhancements, not current sprint | Project Lead |
 | R-05 | Real-time messaging (Supabase Realtime) connection limits under free tier | Technical | Low | Medium | Low-Medium | Implement polling fallback; monitor connection count during testing | Backend Developer |

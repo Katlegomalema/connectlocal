@@ -54,13 +54,52 @@ export const getPaymentById = async (paymentId) => {
   return data;
 };
 
-export const getPaymentByBookingId = async (bookingId) => {
+/** Latest payment row for a booking and purpose ('booking_fee' or 'balance'). */
+export const getPaymentByBookingAndPurpose = async (bookingId, purpose) => {
   const { data, error } = await supabase
     .from('payments')
     .select('*')
     .eq('booking_id', bookingId)
+    .eq('purpose', purpose)
+    .order('created_at', { ascending: false })
+    .limit(1)
     .maybeSingle();
 
+  if (error) throw error;
+  return data;
+};
+
+/** Record the fee / balance state on the booking. Guarded by the expected current value. */
+export const updateBookingPaymentState = async (bookingId, expected, updates) => {
+  let query = supabase.from('bookings').update(updates).eq('id', bookingId);
+  for (const [column, value] of Object.entries(expected)) query = query.eq(column, value);
+  const { data, error } = await query.select('id').maybeSingle();
+
+  if (error) throw error;
+  if (!data) throw new ConflictError('Booking payment state changed; reload and try again');
+  return data;
+};
+
+export const getPayoutByBookingId = async (bookingId) => {
+  const { data, error } = await supabase
+    .from('payouts')
+    .select('*')
+    .eq('booking_id', bookingId)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
+};
+
+/** One payout per booking (unique). Returns the existing one if it was already created. */
+export const createPayout = async (payout) => {
+  const { data, error } = await supabase
+    .from('payouts')
+    .insert(payout)
+    .select('*')
+    .single();
+
+  if (error?.code === '23505') return getPayoutByBookingId(payout.booking_id);
   if (error) throw error;
   return data;
 };
@@ -72,7 +111,7 @@ export const createPayment = async (payment) => {
     .select('*')
     .single();
 
-  if (error?.code === '23505') throw new ConflictError('A payment already exists for this booking');
+  if (error?.code === '23505') throw new ConflictError('This part of the booking is already paid');
   if (error) throw error;
   return data;
 };
@@ -111,8 +150,14 @@ export const listBookingIdsForProvider = async (providerId) => {
   return (data || []).map((booking) => booking.id);
 };
 
-export const listPayments = async ({ bookingIds, status, page, limit }) => {
-  if (!bookingIds.length) return { payments: [], total: 0, page, pages: 0 };
+export const listPayments = async ({
+  bookingIds, status, page, limit
+}) => {
+  if (!bookingIds.length) {
+    return {
+      payments: [], total: 0, page, pages: 0
+    };
+  }
   let query = supabase
     .from('payments')
     .select('*', { count: 'exact' })
@@ -159,7 +204,10 @@ export default {
   getProviderByUserId,
   getUserById,
   getPaymentById,
-  getPaymentByBookingId,
+  getPaymentByBookingAndPurpose,
+  updateBookingPaymentState,
+  createPayout,
+  getPayoutByBookingId,
   createPayment,
   updatePayment,
   listBookingIdsForCustomer,

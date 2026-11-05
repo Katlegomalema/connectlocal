@@ -4,7 +4,7 @@
  */
 
 import * as providerRepository from '../repositories/providerRepository.js';
-import { AppError, ValidationError } from '../utils/errors.js';
+import { AuthorizationError, NotFoundError, ValidationError } from '../utils/errors.js';
 
 const parsePagination = (pageValue, limitValue) => {
   const page = Number.parseInt(pageValue, 10) || 1;
@@ -13,6 +13,38 @@ const parsePagination = (pageValue, limitValue) => {
     throw new ValidationError('page must be positive and limit must be between 1 and 100');
   }
   return { page, limit };
+};
+
+const pointToLatLng = (location) => {
+  const coordinates = location?.coordinates;
+  return Array.isArray(coordinates) ? { latitude: coordinates[1], longitude: coordinates[0] } : {};
+};
+
+/**
+ * What a listing card needs: active services (with active packages), a photo and coordinates.
+ * Never includes the owner's private details.
+ */
+const withListingDetails = async (providers) => {
+  const ids = providers.map((provider) => provider.id);
+  const [services, gallery] = await Promise.all([
+    providerRepository.listActiveServicesForProviders(ids),
+    providerRepository.listGallery(ids)
+  ]);
+  return providers.map((provider) => {
+    const { location, ...rest } = provider;
+    const coordinates = provider.latitude !== undefined
+      ? { latitude: provider.latitude, longitude: provider.longitude }
+      : pointToLatLng(location);
+    return {
+      ...rest,
+      ...coordinates,
+      verified: true, // search only returns verified, active providers
+      photoUrl: gallery.find((photo) => photo.provider_id === provider.id)?.image_url ?? null,
+      services: services
+        .filter((service) => service.provider_id === provider.id)
+        .map((service) => ({ ...service, packages: (service.packages || []).filter((pkg) => pkg.is_active) }))
+    };
+  });
 };
 
 export const searchNearby = async (latitudeValue, longitudeValue, radiusValue = 50, filters = {}) => {
@@ -33,7 +65,7 @@ export const searchNearby = async (latitudeValue, longitudeValue, radiusValue = 
   }
 
   let providers = await providerRepository.searchProvidersByLocation(latitude, longitude, radiusKm);
-  providers = providers.filter((provider) => Number(provider.average_rating || 0) >= minRating);
+  providers = providers.filter((provider) => Number(provider.rating_average || 0) >= minRating);
   const services = await providerRepository.listActiveServicesForProviders(providers.map((provider) => provider.id));
   const servicesByProvider = new Map();
   for (const service of services) {
@@ -42,15 +74,27 @@ export const searchNearby = async (latitudeValue, longitudeValue, radiusValue = 
     servicesByProvider.set(service.provider_id, list);
   }
 
+  let categoryId;
+  if (filters.category) {
+    const categories = await providerRepository.listCategories();
+    const requestedCategory = String(filters.category).trim().toLowerCase();
+    categoryId = categories.find((category) => (
+      category.id.toLowerCase() === requestedCategory
+      || category.name.trim().toLowerCase() === requestedCategory
+    ))?.id;
+    if (!categoryId) providers = [];
+  }
+
   providers = providers.map((provider) => ({
     ...provider,
     services: servicesByProvider.get(provider.id) || []
   }));
-  if (filters.category) {
-    providers = providers.filter((provider) => provider.services.some((service) => service.category === filters.category));
+  if (categoryId) {
+    providers = providers.filter((provider) => provider.services.some((service) => service.category_id === categoryId));
   }
   if (Number.isFinite(maxPrice)) {
-    providers = providers.filter((provider) => provider.services.some((service) => Number(service.price) <= maxPrice));
+    providers = providers.filter((provider) => provider.services
+      .some((service) => Number(service.base_price) <= maxPrice));
   }
 
   return {
@@ -65,7 +109,7 @@ export const searchProviders = async (query, category, pageValue, limitValue) =>
   const { page, limit } = parsePagination(pageValue, limitValue);
   const normalizedQuery = typeof query === 'string' ? query.trim().slice(0, 100) : '';
   const result = await providerRepository.searchProvidersByText(normalizedQuery, { category, page, limit });
-  return { ...result, query: normalizedQuery };
+  return { ...result, providers: await withListingDetails(result.providers), query: normalizedQuery };
 };
 
 export const getCategories = async () => providerRepository.listCategories();
@@ -78,12 +122,32 @@ export const getFeaturedProviders = async (limitValue = 10) => {
   return providerRepository.listFeaturedProviders(limit);
 };
 
-export const saveProvider = async () => {
-  throw new AppError('Saved providers are unavailable until a favorites table is added', 501, 'NOT_IMPLEMENTED');
+export const saveProvider = async (actor, providerId) => {
+  if (actor?.role !== 'customer') throw new AuthorizationError('Only customers can save providers');
+  if (typeof providerId !== 'string' || !/^[0-9a-f-]{36}$/i.test(providerId)) {
+    throw new ValidationError('providerId must be a UUID');
+  }
+  const provider = await providerRepository.getProviderById(providerId);
+  if (provider.verification_status !== 'verified' || !provider.is_active) {
+    throw new NotFoundError('Provider not found');
+  }
+  return providerRepository.addFavorite(actor.id, providerId);
 };
 
-export const getSavedProviders = async () => {
-  throw new AppError('Saved providers are unavailable until a favorites table is added', 501, 'NOT_IMPLEMENTED');
+export const getSavedProviders = async (actor) => {
+  if (actor?.role !== 'customer') throw new AuthorizationError('Only customers can list saved providers');
+  const favorites = await providerRepository.listFavorites(actor.id);
+  return favorites.filter(({ provider }) => (
+    provider?.verification_status === 'verified' && provider.is_active
+  ));
+};
+
+export const removeSavedProvider = async (actor, providerId) => {
+  if (actor?.role !== 'customer') throw new AuthorizationError('Only customers can remove saved providers');
+  if (typeof providerId !== 'string' || !/^[0-9a-f-]{36}$/i.test(providerId)) {
+    throw new ValidationError('providerId must be a UUID');
+  }
+  return providerRepository.removeFavorite(actor.id, providerId);
 };
 
 export default {
@@ -92,5 +156,6 @@ export default {
   getCategories,
   getFeaturedProviders,
   saveProvider,
-  getSavedProviders
+  getSavedProviders,
+  removeSavedProvider
 };

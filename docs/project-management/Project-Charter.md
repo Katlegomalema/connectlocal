@@ -38,7 +38,7 @@ Designated within the project team (see README.md Team Structure); reports to th
 | Final Deployment & Report Submission | Sprint 11 |
 
 ### 4.6 Budget
-Zero/near-zero cash budget; reliant on free/trial tiers of Supabase, Render, Google Maps Platform, and PayFast sandbox. No paid staffing — team time is the primary resource.
+Zero/near-zero cash budget; reliant on free/trial tiers of Supabase and Render and the PayFast sandbox. Flutter renders maps client-side and PostGIS handles radius queries without a paid map API key. No paid staffing — team time is the primary resource.
 
 ### 4.7 Authorization
 This project is authorized for execution as the capstone deliverable of the BSc Information Technology program, subject to ongoing academic supervisor review at each milestone.

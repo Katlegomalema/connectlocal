@@ -13,10 +13,10 @@ Covers booking CRUD and status transitions. Payment-specific endpoints are docum
 
 ### 4.1 Booking Status Lifecycle
 ```
-pending → confirmed → in_progress → completed
-   |            |
-   v            v
-declined    cancelled
+pending → accepted → in_progress → completed
+   |          |
+   v          v
+rejected   cancelled
 ```
 
 ### 4.2 Create Booking
@@ -69,7 +69,7 @@ declined    cancelled
   "success": true,
   "data": {
     "results": [
-      { "bookingId": "bk-2026-00892", "providerName": "Mokoena Plumbing Services", "status": "confirmed", "scheduledStart": "2026-08-05T09:00:00Z" }
+      { "id": "bk-2026-00892", "status": "accepted", "scheduled_start": "2026-08-05T09:00:00Z" }
     ],
     "page": 1, "pageSize": 20, "totalResults": 6
   },
@@ -132,7 +132,7 @@ or
 
 **Response Body (200 OK)**
 ```json
-{ "success": true, "data": { "bookingId": "bk-2026-00892", "status": "confirmed" }, "error": null }
+{ "success": true, "data": { "id": "bk-2026-00892", "status": "accepted" } }
 ```
 
 **Status Codes**
@@ -157,7 +157,7 @@ or
 
 **Response Body (200 OK)**
 ```json
-{ "success": true, "data": { "bookingId": "bk-2026-00892", "scheduledStart": "2026-08-06T10:00:00Z", "status": "pending" }, "error": null }
+{ "success": true, "data": { "id": "bk-2026-00892", "scheduled_start": "2026-08-06T10:00:00Z", "status": "pending" } }
 ```
 
 **Status Codes**

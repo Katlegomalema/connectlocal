@@ -41,13 +41,11 @@ export const formatTimeSlot = (startTime, endTime) => {
 /**
  * Check if a time slot is available
  */
-export const isTimeSlotAvailable = (requestStart, requestEnd, existingSlots) => {
-  return !existingSlots.some(slot => {
-    const slotStart = new Date(slot.start_time);
-    const slotEnd = new Date(slot.end_time);
-    return requestStart < slotEnd && requestEnd > slotStart;
-  });
-};
+export const isTimeSlotAvailable = (requestStart, requestEnd, existingSlots) => !existingSlots.some((slot) => {
+  const slotStart = new Date(slot.start_time);
+  const slotEnd = new Date(slot.end_time);
+  return requestStart < slotEnd && requestEnd > slotStart;
+});
 
 /**
  * Parse query parameters for filtering

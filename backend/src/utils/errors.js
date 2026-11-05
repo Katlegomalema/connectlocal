@@ -45,6 +45,12 @@ export class ConflictError extends AppError {
   }
 }
 
+export class RateLimitError extends AppError {
+  constructor(message = 'Too many requests. Please try again later.') {
+    super(message, 429, 'RATE_LIMITED');
+  }
+}
+
 export class BadRequestError extends AppError {
   constructor(message) {
     super(message, 400, 'BAD_REQUEST');
@@ -52,8 +58,8 @@ export class BadRequestError extends AppError {
 }
 
 export class ExternalServiceError extends AppError {
-  constructor(message = 'External service error', service) {
-    super(message, 502, 'EXTERNAL_SERVICE_ERROR');
+  constructor(message, service) {
+    super(message || 'External service error', 502, 'EXTERNAL_SERVICE_ERROR');
     this.service = service;
   }
 }

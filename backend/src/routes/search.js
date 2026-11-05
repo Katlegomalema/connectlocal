@@ -4,11 +4,14 @@
  */
 
 import express from 'express';
+import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler.js';
-import { optionalToken, verifyToken } from '../middleware/auth.js';
+import { optionalToken, requireRole, verifyToken } from '../middleware/auth.js';
+import { validateBody } from '../middleware/validation.js';
 import * as searchService from '../services/searchService.js';
 
 const router = express.Router();
+const savedProviderSchema = z.object({ providerId: z.string().uuid() }).strict();
 
 /**
  * GET /api/v1/search/nearby
@@ -78,11 +81,12 @@ router.get('/featured', asyncHandler(async (req, res) => {
  * POST /api/v1/search/saved
  * Save a provider to user's favorites
  */
-router.post('/saved', verifyToken, asyncHandler(async (req, res) => {
-  await searchService.saveProvider(req.user, req.body.providerId);
+router.post('/saved', verifyToken, requireRole('customer'), validateBody(savedProviderSchema), asyncHandler(async (req, res) => {
+  const favorite = await searchService.saveProvider(req.user, req.validatedBody.providerId);
   res.status(201).json({
     success: true,
-    message: 'Provider saved successfully'
+    message: 'Provider saved successfully',
+    data: { favorite }
   });
 }));
 
@@ -90,12 +94,17 @@ router.post('/saved', verifyToken, asyncHandler(async (req, res) => {
  * GET /api/v1/search/saved
  * Get user's saved providers
  */
-router.get('/saved', verifyToken, asyncHandler(async (req, res) => {
+router.get('/saved', verifyToken, requireRole('customer'), asyncHandler(async (req, res) => {
   const providers = await searchService.getSavedProviders(req.user);
   res.status(200).json({
     success: true,
     data: { providers }
   });
+}));
+
+router.delete('/saved/:providerId', verifyToken, requireRole('customer'), asyncHandler(async (req, res) => {
+  const result = await searchService.removeSavedProvider(req.user, req.params.providerId);
+  res.status(200).json({ success: true, data: result });
 }));
 
 export default router;

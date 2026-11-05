@@ -1,50 +1,49 @@
-/**
- * Auth API Integration Tests
- * End-to-end tests for authentication endpoints
- */
-
 import request from 'supertest';
 import app from '../../src/app.js';
 
-describe('Auth API Endpoints', () => {
-  describe('POST /api/v1/auth/register', () => {
-    test('should register new user', async () => {
-      const response = await request(app)
-        .post('/api/v1/auth/register')
-        .send({
-          email: 'test@example.com',
-          password: 'SecurePass123!',
-          name: 'Test User'
-        });
+describe('REST API health and authentication routes', () => {
+  test('reports API liveness', async () => {
+    const response = await request(app).get('/health');
 
-      // Add assertions
-      expect(response.status).toBeLessThan(500);
-    });
+    expect(response.status).toBe(200);
+    expect(response.body.status).toBe('ok');
   });
 
-  describe('POST /api/v1/auth/login', () => {
-    test('should authenticate user', async () => {
-      const response = await request(app)
-        .post('/api/v1/auth/login')
-        .send({
-          email: 'test@example.com',
-          password: 'SecurePass123!'
-        });
+  test('validates registration input before calling Supabase', async () => {
+    const response = await request(app).post('/api/v1/auth/register').send({});
 
-      // Add assertions
-      expect(response.status).toBeLessThan(500);
-    });
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
   });
 
-  describe('POST /api/v1/auth/logout', () => {
-    test('should logout authenticated user', async () => {
-      // Need to set up authentication token first
-      const response = await request(app)
-        .post('/api/v1/auth/logout')
-        .set('Authorization', 'Bearer token');
+  test('rejects access to the current-user endpoint without a bearer token', async () => {
+    const response = await request(app).get('/api/v1/auth/me');
 
-      // Add assertions
-      expect(response.status).toBeLessThan(500);
-    });
+    expect(response.status).toBe(401);
+  });
+
+  test('returns a consistent not-found response for unknown API routes', async () => {
+    const response = await request(app).get('/api/v1/not-a-route');
+
+    expect(response.status).toBe(404);
+    expect(response.body.success).toBe(false);
+  });
+
+  test('validates nearby-search coordinates without calling the database', async () => {
+    const response = await request(app)
+      .get('/api/v1/search/nearby')
+      .query({ latitude: '91', longitude: '28' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  test('supports the provider-search route alias with the same coordinate validation', async () => {
+    const response = await request(app)
+      .get('/api/v1/providers/search')
+      .query({ lat: '91', lng: '28' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
   });
 });

@@ -14,8 +14,7 @@ export const initializeFirebase = () => {
 
   try {
     if (!process.env.FIREBASE_PROJECT_ID || !process.env.FIREBASE_CLIENT_EMAIL || !process.env.FIREBASE_PRIVATE_KEY) {
-      logger.warn('Firebase not configured - push notifications disabled');
-      return;
+      throw new ExternalServiceError('Firebase credentials are not configured', 'firebase');
     }
 
     admin.initializeApp({
@@ -41,10 +40,7 @@ export const sendPushNotification = async (deviceToken, notification) => {
   try {
     initializeFirebase();
 
-    if (!initialized || !deviceToken) {
-      logger.warn('Firebase not initialized or token missing - skipping push notification');
-      return null;
-    }
+    if (!deviceToken) throw new ExternalServiceError('A device token is required', 'firebase');
 
     const message = {
       notification: {
@@ -72,9 +68,8 @@ export const sendMulticastNotification = async (deviceTokens, notification) => {
   try {
     initializeFirebase();
 
-    if (!initialized || !Array.isArray(deviceTokens) || deviceTokens.length === 0) {
-      logger.warn('Firebase not initialized or tokens missing - skipping multicast notification');
-      return null;
+    if (!Array.isArray(deviceTokens) || deviceTokens.length === 0) {
+      throw new ExternalServiceError('At least one device token is required', 'firebase');
     }
 
     const message = {

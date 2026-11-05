@@ -7,7 +7,7 @@ This document specifies the quality attributes and operational constraints Conne
 To define measurable quality targets for performance, security, usability, reliability, scalability, and maintainability that will be validated during system testing and used to assess production readiness.
 
 ## 3. Scope
-Applies to the Flutter client applications, the Node.js/Express backend, the Supabase-managed database and authentication layer, and integrations with Google Maps and PayFast.
+Applies to the Flutter client applications, the Node.js/Express backend, the Supabase-managed database and authentication layer, and the PayFast integration.
 
 ## 4. Detailed Content
 
@@ -47,7 +47,7 @@ Applies to the Flutter client applications, the Node.js/Express backend, the Sup
 | ID | Requirement |
 |---|---|
 | NFR-REL-01 | The production backend shall target 99.5% uptime, measured monthly. |
-| NFR-REL-02 | The system shall gracefully degrade (e.g., show cached data) when the Google Maps API is unavailable. |
+| NFR-REL-02 | Nearby search shall remain independent of map-tile vendors; the client may show cached map tiles when offline. |
 | NFR-REL-03 | All booking and payment transactions shall be atomic; partial writes are not permitted. |
 
 ### 4.6 Maintainability
@@ -68,7 +68,7 @@ Applies to the Flutter client applications, the Node.js/Express backend, the Sup
 - Supabase and Render's managed infrastructure SLAs are inherited as the practical ceiling for platform availability.
 
 ## 6. Constraints
-- Free/trial tiers of Supabase, Render, Google Maps, and PayFast sandbox impose rate limits that bound load testing scope.
+- Free/trial tiers of Supabase, Render, and PayFast sandbox impose rate limits that bound load testing scope.
 - No dedicated security penetration testing budget; security validation relies on standard tooling (OWASP ZAP, npm audit, `flutter analyze`).
 
 ## 7. Future Enhancements

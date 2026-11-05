@@ -17,7 +17,8 @@ const createReviewSchema = z.object({
   comment: z.string().max(500).optional()
 }).strict();
 const updateReviewSchema = z.object({
-  rating: z.coerce.number().int().min(1).max(5).optional(),
+  rating: z.coerce.number().int().min(1).max(5)
+    .optional(),
   comment: z.string().max(500).optional()
 }).strict();
 const replySchema = z.object({ response: z.string().min(1).max(500) }).strict();

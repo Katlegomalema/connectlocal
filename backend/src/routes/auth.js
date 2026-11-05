@@ -1,6 +1,16 @@
 /**
- * Authentication Routes
- * Handles user registration, login, token refresh, and logout
+ * Authentication Routes (docs/api-specs/Authentication-API.md)
+ *
+ *   POST /register                  { email, password, fullName, role }      -> 201
+ *   POST /login                     { email, password }                      -> tokens + user
+ *   POST /refresh                   { refreshToken }                         -> new tokens
+ *   POST /logout                    (signed in)                              -> { loggedOut }
+ *   GET  /me                        (signed in)                              -> own profile
+ *   POST /verify-email              { token }
+ *   POST /resend-verification       { email }
+ *   POST /phone/request-otp         (signed in) { phoneNumber }              -> { otpSent, expiresInSeconds }
+ *   POST /phone/verify-otp          (signed in) { otp }                      -> { phoneVerified }
+ *   POST /password-reset, /reset-password
  */
 
 import express from 'express';
@@ -9,227 +19,181 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateBody } from '../middleware/validation.js';
 import { verifyToken } from '../middleware/auth.js';
 import * as authService from '../services/authService.js';
-import { emailSchema, passwordSchema } from '../utils/validators.js';
-import logger from '../utils/logger.js';
+import * as userService from '../services/userService.js';
+import { PHONE_OTP_TTL_MS } from '../config/business.js';
+import { emailSchema, passwordSchema, phoneSchema } from '../utils/validators.js';
 
 const router = express.Router();
 
-// Validation schemas
+// ---- schemas --------------------------------------------------------------------------------------------
 const registerSchema = z.object({
   email: emailSchema,
   password: passwordSchema,
-  firstName: z.string().min(2),
-  lastName: z.string().min(2),
-  role: z.enum(['customer', 'provider']).default('customer'),
+  fullName: z.string().trim().min(2).max(150)
+    .optional(),
+  // Older clients send first/last name separately.
+  firstName: z.string().trim().min(1).max(75)
+    .optional(),
+  lastName: z.string().trim().min(1).max(75)
+    .optional(),
+  // "I need a service" = customer, "I offer a service" = provider. Never admin.
+  role: z.enum(['customer', 'provider']).default('customer')
+}).refine((body) => body.fullName || (body.firstName && body.lastName), {
+  message: 'fullName is required',
+  path: ['fullName']
+});
+
+const loginSchema = z.object({ email: emailSchema, password: z.string().min(1) });
+const refreshTokenSchema = z.object({ refreshToken: z.string().min(1) });
+const emailOnlySchema = z.object({ email: emailSchema });
+const resetPasswordSchema = z.object({ token: z.string().min(1), password: passwordSchema });
+const verifyEmailSchema = z.object({ token: z.string().min(1) });
+const requestOtpSchema = z.object({
+  phoneNumber: phoneSchema.optional(),
+  phone: phoneSchema.optional() // older name
+}).refine((body) => body.phoneNumber || body.phone, { message: 'phoneNumber is required', path: ['phoneNumber'] });
+const verifyOtpSchema = z.object({
+  otp: z.string().regex(/^\d{6}$/, 'The code must be 6 digits'),
+  // Ignored: the number is the one the code was sent to.
+  phoneNumber: z.string().optional(),
   phone: z.string().optional()
 });
 
-const loginSchema = z.object({
-  email: emailSchema,
-  password: z.string()
+// ---- response shapes -------------------------------------------------------------------------------------
+const userSummary = (profile) => {
+  const emailVerified = Boolean(profile.email_verified);
+  const phoneVerified = Boolean(profile.phone_verified);
+  return {
+    id: profile.id,
+    email: profile.email,
+    fullName: profile.full_name ?? null,
+    role: profile.role, // from public.users, never from user-editable metadata
+    emailVerified,
+    phoneVerified,
+    phoneNumber: profile.phone_number ?? null,
+    isVerified: emailVerified && phoneVerified
+  };
+};
+
+const tokens = (session) => ({
+  accessToken: session.access_token,
+  refreshToken: session.refresh_token, // Supabase rotates refresh tokens: always store the new one
+  expiresIn: session.expires_in,
+  expiresAt: session.expires_at
 });
 
-const refreshTokenSchema = z.object({
-  refreshToken: z.string()
-});
+const noStore = (res) => res.set('Cache-Control', 'no-store');
 
-const passwordResetSchema = z.object({
-  email: emailSchema
-});
-
-const resetPasswordSchema = z.object({
-  token: z.string(),
-  password: passwordSchema
-});
-
-const verifyEmailSchema = z.object({
-  token: z.string()
-});
-
-const verifyPhoneSchema = z.object({
-  phone: z.string(),
-  otp: z.string().length(6, 'OTP must be 6 digits')
-});
-const sendPhoneOtpSchema = z.object({
-  phone: z.string().regex(/^\+[1-9]\d{7,14}$/, 'Phone number must use E.164 format')
-});
-
-/**
- * POST /api/v1/auth/register
- * Register a new user with email and password
- */
+// ---- routes ----------------------------------------------------------------------------------------------
 router.post('/register', validateBody(registerSchema), asyncHandler(async (req, res) => {
-  logger.info(`Registration request: ${req.validatedBody.email}`);
-
-  const user = await authService.registerUser(
-    req.validatedBody.email,
-    req.validatedBody.password,
-    {
-      firstName: req.validatedBody.firstName,
-      lastName: req.validatedBody.lastName,
-      role: req.validatedBody.role,
-      phone: req.validatedBody.phone
-    }
-  );
+  const body = req.validatedBody;
+  const user = await authService.registerUser(body.email, body.password, {
+    fullName: body.fullName,
+    firstName: body.firstName,
+    lastName: body.lastName,
+    role: body.role
+  });
+  const profile = user.application_profile;
 
   res.status(201).json({
     success: true,
-    message: 'User registered successfully. Please verify your email.',
+    message: 'Account created. Please confirm your email address.',
     data: {
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.application_profile.role
-      }
+      userId: user.id,
+      email: user.email,
+      role: profile.role,
+      emailVerified: Boolean(profile.email_verified),
+      isVerified: false
     }
   });
 }));
 
-/**
- * POST /api/v1/auth/login
- * Authenticate user and return JWT token
- */
 router.post('/login', validateBody(loginSchema), asyncHandler(async (req, res) => {
-  logger.info(`Login request: ${req.validatedBody.email}`);
-
-  const { user, session } = await authService.loginUser(
-    req.validatedBody.email,
-    req.validatedBody.password
-  );
-
+  const { user, session } = await authService.loginUser(req.validatedBody.email, req.validatedBody.password);
+  noStore(res);
   res.status(200).json({
     success: true,
-    message: 'Login successful',
-    data: {
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.user_metadata?.role || 'customer'
-      },
-      token: session.access_token,
-      refreshToken: session.refresh_token,
-      expiresIn: session.expires_in
-    }
+    data: { ...tokens(session), user: userSummary(user) }
   });
 }));
 
-/**
- * POST /api/v1/auth/refresh
- * Refresh access token using refresh token
- */
 router.post('/refresh', validateBody(refreshTokenSchema), asyncHandler(async (req, res) => {
-  logger.info('Token refresh request');
-
   const { user, session } = await authService.refreshSession(req.validatedBody.refreshToken);
+  noStore(res);
+  res.status(200).json({
+    success: true,
+    data: { ...tokens(session), user: userSummary(user) }
+  });
+}));
 
+router.post('/logout', verifyToken, asyncHandler(async (req, res) => {
+  const accessToken = req.headers.authorization?.split(' ')[1];
+  await authService.logoutUser(accessToken);
+  res.status(200).json({ success: true, data: { loggedOut: true } });
+}));
+
+router.get('/me', verifyToken, asyncHandler(async (req, res) => {
+  const user = await userService.getOwnProfile(req.user);
+  noStore(res);
+  res.status(200).json({ success: true, data: { user } });
+}));
+
+router.post('/verify-email', validateBody(verifyEmailSchema), asyncHandler(async (req, res) => {
+  await authService.verifyUserEmail(req.validatedBody.token);
+  res.status(200).json({ success: true, data: { isVerified: true, emailVerified: true } });
+}));
+
+router.post('/resend-verification', validateBody(emailOnlySchema), asyncHandler(async (req, res) => {
+  await authService.resendVerificationEmail(req.validatedBody.email);
+  // Same answer whether or not the account exists.
+  res.status(200).json({
+    success: true,
+    message: 'If the account exists and is not confirmed yet, a new email has been sent.',
+    data: { sent: true }
+  });
+}));
+
+const requestOtp = asyncHandler(async (req, res) => {
+  const phone = req.validatedBody.phoneNumber || req.validatedBody.phone;
+  const result = await authService.sendPhoneOtp(req.user, phone);
+  noStore(res);
   res.status(200).json({
     success: true,
     data: {
-      token: session.access_token,
-      refreshToken: session.refresh_token,
-      expiresIn: session.expires_in
+      otpSent: true,
+      expiresInSeconds: PHONE_OTP_TTL_MS / 1000,
+      expiresAt: result.expiresAt,
+      // Only outside production (no paid SMS): the app shows the code like an SMS.
+      ...(result.devCode ? { devCode: result.devCode } : {})
     }
   });
-}));
+});
 
-/**
- * POST /api/v1/auth/logout
- * Invalidate user session
- */
-router.post('/logout', verifyToken, asyncHandler(async (req, res) => {
-  logger.info(`Logout request: ${req.user.id}`);
-
-    const accessToken = req.headers.authorization?.split(' ')[1];
-  await authService.logoutUser(accessToken);
-
+const verifyOtp = asyncHandler(async (req, res) => {
+  const result = await authService.verifyPhoneWithOtp(req.user, req.validatedBody.otp);
   res.status(200).json({
     success: true,
-    message: 'Logout successful'
+    data: { phoneVerified: true, phoneNumber: result.phone }
   });
-}));
+});
 
-/**
- * POST /api/v1/auth/password-reset
- * Request password reset email
- */
-router.post('/password-reset', validateBody(passwordResetSchema), asyncHandler(async (req, res) => {
-  logger.info(`Password reset request: ${req.validatedBody.email}`);
+router.post('/phone/request-otp', verifyToken, validateBody(requestOtpSchema), requestOtp);
+router.post('/phone/verify-otp', verifyToken, validateBody(verifyOtpSchema), verifyOtp);
+// Older paths, kept as aliases.
+router.post('/phone/otp', verifyToken, validateBody(requestOtpSchema), requestOtp);
+router.post('/verify-phone', verifyToken, validateBody(verifyOtpSchema), verifyOtp);
 
+router.post('/password-reset', validateBody(emailOnlySchema), asyncHandler(async (req, res) => {
   await authService.sendPasswordResetEmail(req.validatedBody.email);
-
   res.status(200).json({
     success: true,
     message: 'If an account exists, a password reset email has been sent'
   });
 }));
 
-/**
- * POST /api/v1/auth/reset-password
- * Reset password with token from email
- */
 router.post('/reset-password', validateBody(resetPasswordSchema), asyncHandler(async (req, res) => {
-  logger.info('Password reset with token');
-
   await authService.updatePasswordWithToken(req.validatedBody.password, req.validatedBody.token);
-
-  res.status(200).json({
-    success: true,
-    message: 'Password has been reset successfully'
-  });
-}));
-
-/**
- * POST /api/v1/auth/verify-email
- * Verify email address with token
- */
-router.post('/verify-email', validateBody(verifyEmailSchema), asyncHandler(async (req, res) => {
-  logger.info('Email verification request');
-
-  const user = await authService.verifyUserEmail(req.validatedBody.token);
-
-  res.status(200).json({
-    success: true,
-    message: 'Email verified successfully',
-    data: {
-      user: {
-        id: user.id,
-        email: user.email
-      }
-    }
-  });
-}));
-
-/**
- * POST /api/v1/auth/verify-phone
- * Verify phone number with OTP
- */
-router.post('/verify-phone', validateBody(verifyPhoneSchema), asyncHandler(async (req, res) => {
-  logger.info('Phone verification request');
-  const user = await authService.verifyPhoneWithOtp(req.validatedBody.phone, req.validatedBody.otp);
-
-  res.status(200).json({
-    success: true,
-    message: 'Phone verified successfully',
-    data: { user: { id: user.id, phone: user.phone } }
-  });
-}));
-
-router.post('/phone/otp', validateBody(sendPhoneOtpSchema), asyncHandler(async (req, res) => {
-  await authService.sendPhoneOtp(req.validatedBody.phone);
-  res.status(200).json({ success: true, message: 'Phone verification code sent' });
-}));
-
-/**
- * GET /api/v1/auth/me
- * Get current authenticated user info
- */
-router.get('/me', verifyToken, asyncHandler(async (req, res) => {
-  res.status(200).json({
-    success: true,
-    data: {
-      user: req.user
-    }
-  });
+  res.status(200).json({ success: true, message: 'Password has been reset successfully' });
 }));
 
 export default router;

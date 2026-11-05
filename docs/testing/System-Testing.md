@@ -22,7 +22,7 @@ System testing is performed manually against the staging environment by the QA E
 5. Concurrent booking attempts on the same time slot (conflict handling).
 
 ### 4.3 Cross-Platform Verification
-Each system test cycle is executed once on Android (emulator + physical device where available), once on iOS (simulator), and once on Flutter Web (Chrome), to catch platform-specific rendering or plugin issues (e.g., Google Maps plugin behavior differences).
+Each system test cycle is executed once on Android (emulator + physical device where available), once on iOS (simulator), and once on Flutter Web (Chrome), to catch platform-specific Flutter map renderer and tile-layer behavior.
 
 ### 4.4 Non-Functional Spot Checks
 - Response time sampling against the NFR-PERF targets using Postman's response-time reporting.

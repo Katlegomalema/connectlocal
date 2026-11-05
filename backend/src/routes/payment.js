@@ -11,7 +11,10 @@ import { validateBody } from '../middleware/validation.js';
 import * as paymentService from '../services/paymentService.js';
 
 const router = express.Router();
-const intentSchema = z.object({ bookingId: z.string().min(1) }).strict();
+const intentSchema = z.object({
+  bookingId: z.string().uuid(),
+  purpose: z.enum(['booking_fee', 'balance']).default('booking_fee')
+}).strict();
 const confirmSchema = z.object({ paymentId: z.string().min(1) }).strict();
 
 /**
@@ -19,7 +22,11 @@ const confirmSchema = z.object({ paymentId: z.string().min(1) }).strict();
  * Create a payment intent for a booking
  */
 router.post('/intent', verifyToken, validateBody(intentSchema), asyncHandler(async (req, res) => {
-  const payment = await paymentService.createPaymentIntent(req.user, req.validatedBody.bookingId);
+  const payment = await paymentService.createPaymentIntent(
+    req.user,
+    req.validatedBody.bookingId,
+    req.validatedBody.purpose
+  );
   res.status(201).json({
     success: true,
     message: 'Payment intent created',

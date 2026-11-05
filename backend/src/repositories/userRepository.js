@@ -56,12 +56,10 @@ export const updateUser = async (userId, updates) => {
 /**
  * Delete user profile
  */
-export const deleteUser = async (userId) => {
-  return updateUser(userId, {
-    is_active: false,
-    deleted_at: new Date().toISOString()
-  });
-};
+export const deleteUser = async (userId) => updateUser(userId, {
+  is_active: false,
+  deleted_at: new Date().toISOString()
+});
 
 /**
  * Fetch user by email

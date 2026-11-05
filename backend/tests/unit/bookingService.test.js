@@ -1,8 +1,12 @@
 import { jest } from '@jest/globals';
 
+process.env.CODE_HASH_SECRET = process.env.CODE_HASH_SECRET || 'test-only-secret-test-only-secret-test-only-secret';
+
 const repository = {
   getServiceById: jest.fn(),
   getProviderById: jest.fn(),
+  getPackageById: jest.fn(),
+  getCustomerById: jest.fn(),
   hasBookingConflict: jest.fn(),
   createBooking: jest.fn(),
   getBookingById: jest.fn(),
@@ -10,70 +14,228 @@ const repository = {
   updateBooking: jest.fn(),
   listBookings: jest.fn()
 };
+const paymentService = {
+  refundBookingFee: jest.fn(),
+  recordCashBalance: jest.fn()
+};
 
 jest.unstable_mockModule('../../src/repositories/bookingRepository.js', () => repository);
+jest.unstable_mockModule('../../src/services/paymentService.js', () => paymentService);
 const bookingService = await import('../../src/services/bookingService.js');
+const { deriveArrivalPin, hashArrivalPin } = await import('../../src/utils/secureCodes.js');
+
+const customer = { id: 'customer-1', role: 'customer' };
+const providerUser = { id: 'provider-user-1', role: 'provider' };
+const inOneDay = () => new Date(Date.now() + 86400000).toISOString();
+const verifiedProvider = {
+  id: 'provider-1', user_id: 'provider-user-1', verification_status: 'verified', is_active: true
+};
+
+const givenService = (overrides = {}) => repository.getServiceById.mockResolvedValue({
+  id: 'service-1',
+  provider_id: 'provider-1',
+  base_price: '450.00',
+  duration_minutes: 60,
+  active: true,
+  pricing_type: 'fixed',
+  ...overrides
+});
 
 describe('Booking service', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-  });
-
-  test('creates a pending booking using the service price and duration', async () => {
-    repository.getServiceById.mockResolvedValue({
-      id: 'service-1',
-      provider_id: 'provider-1',
-      price: '450.00',
-      duration_minutes: 60,
-      is_active: true
-    });
-    repository.getProviderById.mockResolvedValue({
-      id: 'provider-1',
-      user_id: 'provider-user-1',
-      verification_status: 'approved'
-    });
+    repository.getCustomerById.mockResolvedValue({ id: 'customer-1', email_verified: true, phone_verified: true });
+    repository.getProviderById.mockResolvedValue(verifiedProvider);
+    repository.getProviderByUserId.mockResolvedValue(verifiedProvider);
     repository.hasBookingConflict.mockResolvedValue(false);
     repository.createBooking.mockImplementation(async (booking) => ({ id: 'booking-1', ...booking }));
+    repository.updateBooking.mockImplementation(async (id, statuses, updates) => ({ id, ...updates }));
+  });
 
-    const scheduledStart = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-    const booking = await bookingService.createBooking(
-      { id: 'customer-1', role: 'customer' },
-      { providerId: 'provider-1', serviceId: 'service-1', scheduledStart, notes: 'Please call first' }
-    );
+  // ---------------- create ----------------
+  test('fixed price: total = base price, fee = 15%, balance left to the database', async () => {
+    givenService();
+    const booking = await bookingService.createBooking(customer, {
+      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), notes: 'Please call first'
+    });
 
-    expect(booking.status).toBe('pending');
-    expect(booking.total_price).toBe(450);
-    expect(booking.customer_id).toBe('customer-1');
-    expect(new Date(booking.scheduled_end).getTime() - new Date(booking.scheduled_start).getTime()).toBe(3600000);
-    expect(repository.createBooking).toHaveBeenCalledTimes(1);
+    expect(booking).toMatchObject({
+      status: 'pending',
+      customer_id: 'customer-1',
+      pricing_type_at_booking: 'fixed',
+      quantity: 1,
+      total_amount: 450,
+      booking_fee_rate: 0.15,
+      booking_fee_amount: 67.5,
+      booking_fee_status: 'pending'
+    });
+    expect(new Date(booking.scheduled_end) - new Date(booking.scheduled_start)).toBe(3600000);
+  });
+
+  test('hourly price: hours x rate, and the slot lasts that many hours', async () => {
+    givenService({ pricing_type: 'hourly', base_price: '200.00' });
+    const booking = await bookingService.createBooking(customer, {
+      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), hours: 3
+    });
+    expect(booking).toMatchObject({ total_amount: 600, quantity: 3, booking_fee_amount: 90 });
+    expect(new Date(booking.scheduled_end) - new Date(booking.scheduled_start)).toBe(3 * 3600000);
+  });
+
+  test('package price: uses the package price and keeps a snapshot of its name', async () => {
+    givenService({ pricing_type: 'package' });
+    repository.getPackageById.mockResolvedValue({
+      id: 'pkg-1', service_id: 'service-1', name: 'Full house', price: '1200.00', duration_minutes: 180, is_active: true
+    });
+    const booking = await bookingService.createBooking(customer, {
+      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), packageId: 'pkg-1'
+    });
+    expect(booking).toMatchObject({
+      total_amount: 1200, booking_fee_amount: 180, package_id: 'pkg-1', package_name_at_booking: 'Full house'
+    });
+  });
+
+  test('package from another service is rejected', async () => {
+    givenService({ pricing_type: 'package' });
+    repository.getPackageById.mockResolvedValue({
+      id: 'pkg-9', service_id: 'other-service', name: 'X', price: 1, is_active: true
+    });
+    await expect(bookingService.createBooking(customer, {
+      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), packageId: 'pkg-9'
+    })).rejects.toThrow('Package not found');
+  });
+
+  test('customer without a verified phone cannot book', async () => {
+    repository.getCustomerById.mockResolvedValue({ id: 'customer-1', email_verified: true, phone_verified: false });
+    givenService();
+    await expect(bookingService.createBooking(customer, {
+      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    })).rejects.toThrow('Verify your email address and phone number');
+    expect(repository.createBooking).not.toHaveBeenCalled();
   });
 
   test('rejects a booking when the provider slot is already occupied', async () => {
-    repository.getServiceById.mockResolvedValue({
-      id: 'service-1',
-      provider_id: 'provider-1',
-      price: 450,
-      duration_minutes: 60,
-      is_active: true
-    });
-    repository.getProviderById.mockResolvedValue({ id: 'provider-1', verification_status: 'approved' });
+    givenService();
     repository.hasBookingConflict.mockResolvedValue(true);
-
-    await expect(bookingService.createBooking(
-      { id: 'customer-1', role: 'customer' },
-      {
-        providerId: 'provider-1',
-        serviceId: 'service-1',
-        scheduledStart: new Date(Date.now() + 60 * 60 * 1000).toISOString()
-      }
-    )).rejects.toMatchObject({ statusCode: 409 });
+    await expect(bookingService.createBooking(customer, {
+      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    })).rejects.toThrow('time slot is unavailable');
     expect(repository.createBooking).not.toHaveBeenCalled();
   });
 
   test('rejects provider booking creation', async () => {
-    await expect(bookingService.createBooking(
-      { id: 'provider-user-1', role: 'provider' },
-      { providerId: 'provider-1', serviceId: 'service-1', scheduledStart: new Date(Date.now() + 3600000).toISOString() }
-    )).rejects.toMatchObject({ statusCode: 403 });
+    await expect(bookingService.createBooking(providerUser, {
+      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    })).rejects.toThrow('not allowed');
+  });
+
+  // ---------------- accept / PIN ----------------
+  test('provider cannot accept before the booking fee is paid', async () => {
+    repository.getBookingById.mockResolvedValue({ id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'pending' });
+    await expect(bookingService.acceptBooking(providerUser, 'booking-1')).rejects.toThrow('not paid the booking fee');
+  });
+
+  test('accepting stores only the PIN hash and never returns it', async () => {
+    repository.getBookingById.mockResolvedValue({ id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid' });
+    const booking = await bookingService.acceptBooking(providerUser, 'booking-1');
+
+    const updates = repository.updateBooking.mock.calls[0][2];
+    expect(updates.status).toBe('accepted');
+    expect(updates.arrival_pin_hash).toBe(hashArrivalPin('booking-1', deriveArrivalPin('booking-1')));
+    expect(updates.arrival_pin_hash).not.toContain(deriveArrivalPin('booking-1'));
+    expect(booking).not.toHaveProperty('arrival_pin_hash');
+  });
+
+  test('customer can see the PIN once accepted; the provider cannot', async () => {
+    const accepted = {
+      id: 'booking-1', customer_id: 'customer-1', provider_id: 'provider-1', status: 'accepted', arrival_pin_hash: 'x', arrival_pin_attempts: 1
+    };
+    repository.getBookingById.mockResolvedValue(accepted);
+    const pin = await bookingService.getArrivalPin(customer, 'booking-1');
+    expect(pin).toEqual({ bookingId: 'booking-1', pin: deriveArrivalPin('booking-1'), attemptsLeft: 4 });
+    expect(pin.pin).toMatch(/^\d{4}$/);
+    await expect(bookingService.getArrivalPin(providerUser, 'booking-1')).rejects.toThrow('not allowed');
+  });
+
+  test('correct PIN starts the job', async () => {
+    const pin = deriveArrivalPin('booking-1');
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', provider_id: 'provider-1', status: 'accepted', arrival_pin_attempts: 0, arrival_pin_hash: hashArrivalPin('booking-1', pin)
+    });
+    const booking = await bookingService.startBooking(providerUser, 'booking-1', pin);
+    expect(repository.updateBooking).toHaveBeenCalledWith('booking-1', ['accepted'], expect.objectContaining({
+      status: 'in_progress', arrival_pin_verified_at: expect.any(String)
+    }), { arrival_pin_attempts: 0 });
+    expect(booking.status).toBe('in_progress');
+  });
+
+  test('wrong PIN counts an attempt and does not start the job', async () => {
+    const pin = deriveArrivalPin('booking-1');
+    const wrong = pin === '0000' ? '1111' : '0000';
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', provider_id: 'provider-1', status: 'accepted', arrival_pin_attempts: 2, arrival_pin_hash: hashArrivalPin('booking-1', pin)
+    });
+    await expect(bookingService.startBooking(providerUser, 'booking-1', wrong)).rejects.toThrow('2 tries left');
+    expect(repository.updateBooking).toHaveBeenCalledWith('booking-1', ['accepted'], { arrival_pin_attempts: 3 }, { arrival_pin_attempts: 2 });
+  });
+
+  test('after 5 wrong PINs the job cannot be started', async () => {
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', provider_id: 'provider-1', status: 'accepted', arrival_pin_attempts: 5, arrival_pin_hash: 'x'
+    });
+    await expect(bookingService.startBooking(providerUser, 'booking-1', '1234')).rejects.toThrow('Too many wrong PINs');
+    expect(repository.updateBooking).not.toHaveBeenCalled();
+  });
+
+  test('a job can only be completed after it was started with the PIN', async () => {
+    repository.getBookingById.mockResolvedValue({ id: 'booking-1', provider_id: 'provider-1', status: 'accepted' });
+    await expect(bookingService.completeBooking(providerUser, 'booking-1')).rejects.toThrow('PIN entered on arrival');
+  });
+
+  // ---------------- decline / cancel refunds ----------------
+  test('provider decline refunds the fee', async () => {
+    const booking = { id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid' };
+    repository.getBookingById.mockResolvedValue(booking);
+    paymentService.refundBookingFee.mockResolvedValue(true);
+    const result = await bookingService.declineBooking(providerUser, 'booking-1', 'Fully booked');
+    expect(paymentService.refundBookingFee).toHaveBeenCalledWith(booking);
+    expect(result).toMatchObject({ status: 'rejected', cancelled_by: 'provider', feeRefund: 'refunded' });
+  });
+
+  test('a failed refund does not undo the decline (admin follow-up)', async () => {
+    repository.getBookingById.mockResolvedValue({ id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid' });
+    paymentService.refundBookingFee.mockRejectedValue(new Error('PayFast down'));
+    const result = await bookingService.declineBooking(providerUser, 'booking-1');
+    expect(result).toMatchObject({ status: 'rejected', feeRefund: 'failed' });
+  });
+
+  test('customer cancelling while pending gets the fee back', async () => {
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', customer_id: 'customer-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid', scheduled_start: inOneDay()
+    });
+    paymentService.refundBookingFee.mockResolvedValue(true);
+    const result = await bookingService.cancelBooking(customer, 'booking-1');
+    expect(result.feeRefund).toBe('refunded');
+  });
+
+  test('customer cancelling after acceptance keeps the fee as deposit', async () => {
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1',
+      customer_id: 'customer-1',
+      provider_id: 'provider-1',
+      status: 'accepted',
+      booking_fee_status: 'paid',
+      scheduled_start: new Date(Date.now() + 5 * 86400000).toISOString()
+    });
+    const result = await bookingService.cancelBooking(customer, 'booking-1');
+    expect(result.feeRefund).toBe('kept');
+    expect(paymentService.refundBookingFee).not.toHaveBeenCalled();
+  });
+
+  test('booking responses never contain the PIN hash', async () => {
+    repository.getBookingById.mockResolvedValue({ id: 'booking-1', customer_id: 'customer-1', arrival_pin_hash: 'secret-hash' });
+    expect(await bookingService.getBooking(customer, 'booking-1')).not.toHaveProperty('arrival_pin_hash');
+    repository.listBookings.mockResolvedValue({ bookings: [{ id: 'b', arrival_pin_hash: 'secret-hash' }], total: 1 });
+    const list = await bookingService.listBookings(customer, {});
+    expect(list.bookings[0]).not.toHaveProperty('arrival_pin_hash');
   });
 });

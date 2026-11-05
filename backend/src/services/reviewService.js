@@ -27,6 +27,8 @@ export const createReview = async (actor, { bookingId, rating, comment }) => {
   const booking = await reviewRepository.getBookingById(bookingId);
   if (booking.customer_id !== actor.id) throw new AuthorizationError('You do not own this booking');
   if (booking.status !== 'completed') throw new ConflictError('Only completed bookings can be reviewed');
+  // Business rule: review allowed only after the balance is paid.
+  if (booking.balance_status !== 'paid') throw new ConflictError('You can review once the balance is paid');
 
   const review = await reviewRepository.createReview({
     booking_id: booking.id,

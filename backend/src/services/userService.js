@@ -10,7 +10,7 @@ import { AuthorizationError, ValidationError } from '../utils/errors.js';
 const publicProfileFields = [
   'id',
   'full_name',
-    'profile_image',
+  'profile_image',
   'role',
   'created_at'
 ];
@@ -24,6 +24,30 @@ const assertCanManageUser = (actor, userId) => {
 export const getUserProfile = async (userId) => {
   const user = await userRepository.getUserById(userId);
   return Object.fromEntries(publicProfileFields.map((field) => [field, user[field] ?? null]));
+};
+
+/**
+ * The signed-in user's own profile (GET /users/me). Includes private fields (email, phone,
+ * verification flags) that the public profile hides. Shape follows docs/api-specs/User-API.md.
+ */
+export const getOwnProfile = async (actor) => {
+  if (!actor?.id) throw new AuthorizationError('Authentication required');
+  const user = await userRepository.getUserById(actor.id);
+  const emailVerified = Boolean(user.email_verified);
+  const phoneVerified = Boolean(user.phone_verified);
+  return {
+    id: user.id,
+    fullName: user.full_name ?? null,
+    email: user.email ?? null,
+    phoneNumber: user.phone_number ?? null,
+    profilePhotoUrl: user.profile_image ?? null,
+    role: user.role,
+    emailVerified,
+    phoneVerified,
+    // Customers may only book once both email and phone are verified.
+    isVerified: emailVerified && phoneVerified,
+    createdAt: user.created_at ?? null
+  };
 };
 
 export const updateUserProfile = async (actor, userId, input) => {
@@ -46,21 +70,21 @@ export const updateUserProfile = async (actor, userId, input) => {
     updates.phone_number = phoneNumber || null;
   }
 
-  if (input.address !== undefined) {
-    const address = input.address.trim();
-    if (address.length > 500) throw new ValidationError('address cannot exceed 500 characters');
-    updates.address = address || null;
-  }
-
   if (input.profilePhotoUrl !== undefined) {
     if (input.profilePhotoUrl && !/^https:\/\//i.test(input.profilePhotoUrl)) {
       throw new ValidationError('profilePhotoUrl must use HTTPS');
     }
-      updates.profile_image = input.profilePhotoUrl || null;
+    updates.profile_image = input.profilePhotoUrl || null;
   }
 
   if (Object.keys(updates).length === 0) {
     throw new ValidationError('At least one editable profile field is required');
+  }
+
+  if (updates.phone_number !== undefined) {
+    // A new number must be verified again (business rule: verified phone before booking).
+    const current = await userRepository.getUserById(userId);
+    if (current.phone_number !== updates.phone_number) updates.phone_verified = false;
   }
 
   const user = await userRepository.updateUser(userId, updates);
@@ -87,6 +111,7 @@ export const deleteUserProfile = async (actor, userId) => {
 };
 
 export default {
+  getOwnProfile,
   getUserProfile,
   updateUserProfile,
   getUserBookings,

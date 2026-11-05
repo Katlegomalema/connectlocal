@@ -7,14 +7,20 @@ import express from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken, requireRole } from '../middleware/auth.js';
-import { validateBody } from '../middleware/validation.js';
+import { validateBody, validateUuidParam } from '../middleware/validation.js';
 import * as adminService from '../services/adminService.js';
 
 const router = express.Router();
+const rejectSchema = z.object({ reason: z.string().trim().min(3).max(1000) }).strict();
 const updateUserSchema = z.object({ status: z.enum(['active', 'suspended', 'deactivated']) }).strict();
+const disputeUpdateSchema = z.object({
+  status: z.enum(['under_review', 'resolved', 'rejected']).default('resolved'),
+  resolutionNotes: z.string().max(5000).optional()
+}).strict();
 
 // Middleware: Ensure user is admin
 router.use(verifyToken, requireRole('admin'));
+router.param('id', validateUuidParam);
 
 /**
  * GET /api/v1/admin/users
@@ -47,7 +53,9 @@ router.put('/users/:id', validateBody(updateUserSchema), asyncHandler(async (req
  * List pending provider verification requests
  * Query params: page, limit
  */
+/** GET /providers/pending?status=pending|verified|rejected  (default pending = submitted, oldest first) */
 router.get('/providers/pending', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store'); // contains signed document links
   const result = await adminService.listPendingProviders(req.user, req.query);
   res.status(200).json({
     success: true,
@@ -72,8 +80,8 @@ router.post('/providers/:id/verify', asyncHandler(async (req, res) => {
  * POST /api/v1/admin/providers/:id/reject
  * Reject a provider verification
  */
-router.post('/providers/:id/reject', asyncHandler(async (req, res) => {
-  const provider = await adminService.decideProviderVerification(req.user, req.params.id, 'reject');
+router.post('/providers/:id/reject', validateBody(rejectSchema), asyncHandler(async (req, res) => {
+  const provider = await adminService.decideProviderVerification(req.user, req.params.id, 'reject', req.validatedBody.reason);
   res.status(200).json({
     success: true,
     message: 'Provider verification rejected',
@@ -110,7 +118,6 @@ router.post('/reviews/:id/hide', asyncHandler(async (req, res) => {
 /**
  * GET /api/v1/admin/analytics
  * Get platform analytics
- * Query params: from, to, metrics
  */
 router.get('/analytics', asyncHandler(async (req, res) => {
   const analytics = await adminService.getAnalytics(req.user);
@@ -122,7 +129,7 @@ router.get('/analytics', asyncHandler(async (req, res) => {
 
 /**
  * GET /api/v1/admin/disputes
- * List active disputes
+ * List active disputes by default, or filter by status
  * Query params: page, limit, status
  */
 router.get('/disputes', asyncHandler(async (req, res) => {
@@ -134,8 +141,8 @@ router.get('/disputes', asyncHandler(async (req, res) => {
  * PUT /api/v1/admin/disputes/:id
  * Resolve a dispute
  */
-router.put('/disputes/:id', asyncHandler(async (req, res) => {
-  const dispute = await adminService.resolveDispute(req.user, req.params.id, req.body);
+router.put('/disputes/:id', validateBody(disputeUpdateSchema), asyncHandler(async (req, res) => {
+  const dispute = await adminService.resolveDispute(req.user, req.params.id, req.validatedBody);
   res.status(200).json({ success: true, message: 'Dispute resolved', data: dispute });
 }));
 

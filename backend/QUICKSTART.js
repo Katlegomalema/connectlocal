@@ -159,7 +159,7 @@ Required:
   SUPABASE_SERVICE_ROLE_KEY  Supabase service role key
 
 Optional (for features):
-  GOOGLE_MAPS_API_KEY        Google Maps API key
+  DATABASE_URL               Supabase PostgreSQL connection for migrations
   PAYFAST_MERCHANT_ID        PayFast merchant ID
   FIREBASE_PROJECT_ID        Firebase project ID
   SENDGRID_API_KEY           SendGrid API key

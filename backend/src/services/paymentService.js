@@ -5,7 +5,10 @@
 
 import * as paymentRepository from '../repositories/paymentRepository.js';
 import * as payfast from '../integrations/payfast.js';
-import { AuthorizationError, ConflictError, ExternalServiceError, NotFoundError, ValidationError } from '../utils/errors.js';
+import { COMMISSION_RATE, commissionFor } from '../config/business.js';
+import {
+  AuthorizationError, ConflictError, ExternalServiceError, NotFoundError, ValidationError
+} from '../utils/errors.js';
 
 const FINAL_STATUSES = ['paid', 'refunded', 'partially_refunded'];
 
@@ -22,7 +25,8 @@ const toAmount = (value) => Math.round(Number(value) * 100) / 100;
 
 const getCheckoutUrls = () => {
   const publicApiUrl = process.env.PUBLIC_API_URL || process.env.API_BASE_URL;
-  const frontendUrl = process.env.FRONTEND_URL;
+  // FRONTEND_URL may list several origins (CORS); the first one is the customer app.
+  const frontendUrl = (process.env.FRONTEND_URL || '').split(',')[0].trim();
   if (!publicApiUrl || !frontendUrl) {
     throw new ExternalServiceError('PUBLIC_API_URL/API_BASE_URL and FRONTEND_URL are required for PayFast checkout', 'payfast');
   }
@@ -33,19 +37,50 @@ const getCheckoutUrls = () => {
   };
 };
 
-export const createPaymentIntent = async (actor, bookingId) => {
+const PURPOSES = {
+  booking_fee: {
+    bookingStatus: 'pending',
+    stateColumn: 'booking_fee_status',
+    amountColumn: 'booking_fee_amount',
+    itemName: 'ConnectLocal booking fee (15% deposit)',
+    wrongStatus: 'The booking fee can only be paid while the booking is pending'
+  },
+  balance: {
+    bookingStatus: 'completed',
+    stateColumn: 'balance_status',
+    amountColumn: 'balance_amount',
+    itemName: 'ConnectLocal service balance',
+    wrongStatus: 'The balance can only be paid after the job is completed'
+  }
+};
+
+const purposeConfig = (purpose) => {
+  const config = PURPOSES[purpose];
+  if (!config) throw new ValidationError('purpose must be booking_fee or balance');
+  return config;
+};
+
+/**
+ * Card checkout (PayFast) for the 15% booking fee or for the balance after completion.
+ */
+export const createPaymentIntent = async (actor, bookingId, purpose = 'booking_fee') => {
   if (actor?.role !== 'customer') throw new AuthorizationError('Only customers can pay for bookings');
   if (!bookingId) throw new ValidationError('bookingId is required');
+  const config = purposeConfig(purpose);
 
   const booking = await paymentRepository.getBookingById(bookingId);
   if (booking.customer_id !== actor.id) throw new AuthorizationError('You do not own this booking');
-  if (booking.status !== 'accepted') throw new ConflictError('Only accepted bookings can be paid');
-  const amount = toAmount(booking.total_amount);
+  if (booking.status !== config.bookingStatus) throw new ConflictError(config.wrongStatus);
+  if (booking[config.stateColumn] === 'paid') throw new ConflictError('This part of the booking is already paid');
+  if (!['pending', 'failed'].includes(booking[config.stateColumn])) {
+    throw new ConflictError('This part of the booking can no longer be paid');
+  }
+  const amount = toAmount(booking[config.amountColumn]);
   if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('Booking has an invalid payment amount');
 
-  let payment = await paymentRepository.getPaymentByBookingId(bookingId);
+  let payment = await paymentRepository.getPaymentByBookingAndPurpose(bookingId, purpose);
   if (payment && FINAL_STATUSES.includes(payment.payment_status)) {
-    throw new ConflictError('This booking already has a completed payment');
+    throw new ConflictError('This part of the booking is already paid');
   }
   if (payment?.payment_status === 'failed') {
     payment = await paymentRepository.updatePayment(payment.id, ['failed'], {
@@ -61,7 +96,9 @@ export const createPaymentIntent = async (actor, bookingId) => {
       amount,
       currency: 'ZAR',
       gateway_provider: 'payfast',
-      payment_status: 'pending'
+      payment_status: 'pending',
+      purpose,
+      method: 'card'
     });
   }
 
@@ -77,7 +114,7 @@ export const createPaymentIntent = async (actor, bookingId) => {
       first_name: nameParts[0] || 'Customer',
       last_name: nameParts.slice(1).join(' ') || 'ConnectLocal',
       email: customer.email,
-      item_name: 'ConnectLocal service booking',
+      item_name: config.itemName,
       item_description: `Booking ${booking.id}`,
       reference: payment.id,
       booking_id: booking.id
@@ -85,6 +122,7 @@ export const createPaymentIntent = async (actor, bookingId) => {
 
     return {
       paymentId: payment.id,
+      purpose,
       amount,
       currency: 'ZAR',
       status: payment.payment_status,
@@ -97,6 +135,89 @@ export const createPaymentIntent = async (actor, bookingId) => {
     }
     throw error;
   }
+};
+
+/**
+ * Payout for a finished job: price - 10% commission - cash the provider already collected.
+ * Created automatically when the balance is paid (admin never marks payouts).
+ */
+const createPayoutForBooking = async (booking, cashCollected = 0) => {
+  const gross = toAmount(booking.total_amount);
+  return paymentRepository.createPayout({
+    booking_id: booking.id,
+    provider_id: booking.provider_id,
+    gross_amount: gross,
+    commission_rate: COMMISSION_RATE,
+    commission_amount: commissionFor(gross),
+    cash_collected_amount: toAmount(cashCollected),
+    status: 'pending'
+  });
+};
+
+/** Apply a confirmed card payment to its booking. */
+const applyPaidPayment = async (payment) => {
+  const booking = await paymentRepository.getBookingById(payment.booking_id);
+  if (payment.purpose === 'balance') {
+    await paymentRepository.updateBookingPaymentState(booking.id, {}, {
+      balance_status: 'paid',
+      balance_payment_method: 'card'
+    });
+    await createPayoutForBooking(booking, 0);
+  } else {
+    await paymentRepository.updateBookingPaymentState(booking.id, {}, { booking_fee_status: 'paid' });
+  }
+};
+
+/**
+ * The provider confirms the customer paid the balance in cash.
+ */
+export const recordCashBalance = async (actor, bookingId) => {
+  if (actor?.role !== 'provider') throw new AuthorizationError('Only the provider can confirm a cash payment');
+  const booking = await paymentRepository.getBookingById(bookingId);
+  const provider = await paymentRepository.getProviderByUserId(actor.id);
+  if (provider.id !== booking.provider_id) throw new AuthorizationError('You do not own this booking');
+  if (booking.status !== 'completed') throw new ConflictError(PURPOSES.balance.wrongStatus);
+  if (booking.balance_status === 'paid') throw new ConflictError('The balance is already paid');
+
+  const amount = toAmount(booking.balance_amount);
+  const payment = await paymentRepository.createPayment({
+    booking_id: booking.id,
+    amount,
+    currency: 'ZAR',
+    gateway_provider: null,
+    payment_status: 'paid',
+    purpose: 'balance',
+    method: 'cash',
+    paid_at: new Date().toISOString()
+  });
+  await paymentRepository.updateBookingPaymentState(booking.id, { balance_status: booking.balance_status }, {
+    balance_status: 'paid',
+    balance_payment_method: 'cash'
+  });
+  await paymentRepository.createReceipt(payment.id);
+  const payout = await createPayoutForBooking(booking, amount);
+  return { payment, payout };
+};
+
+/**
+ * Refund the booking fee (provider declined, or customer cancelled while pending).
+ * Returns true when money was sent back.
+ */
+export const refundBookingFee = async (booking) => {
+  if (booking.booking_fee_status !== 'paid') return false;
+  const payment = await paymentRepository.getPaymentByBookingAndPurpose(booking.id, 'booking_fee');
+  if (!payment || payment.payment_status !== 'paid') return false;
+  if (!payment.transaction_reference) throw new ConflictError('PayFast transaction reference is missing');
+
+  await payfast.processRefund(payment.transaction_reference, payment.amount);
+  await paymentRepository.updatePayment(payment.id, ['paid'], {
+    payment_status: 'refunded',
+    refunded_amount: payment.amount
+  });
+  await paymentRepository.updateBookingPaymentState(booking.id, { booking_fee_status: 'paid' }, {
+    booking_fee_status: 'refunded'
+  });
+  return true;
 };
 
 export const getPayment = async (actor, paymentId) => {
@@ -125,7 +246,9 @@ export const listPayments = async (actor, { page: pageValue, limit: limitValue, 
   } else {
     throw new AuthorizationError('Payment history is limited to booking participants');
   }
-  return paymentRepository.listPayments({ bookingIds, status, page, limit });
+  return paymentRepository.listPayments({
+    bookingIds, status, page, limit
+  });
 };
 
 export const getReceipt = async (actor, paymentId) => {
@@ -135,15 +258,21 @@ export const getReceipt = async (actor, paymentId) => {
   }
   const receipt = await paymentRepository.getReceiptByPaymentId(payment.id);
   if (!receipt) throw new NotFoundError('Receipt not found');
-  const commission = 0;
+  // Commission is taken from the job price once, on the payout (fee receipts show none).
+  const payout = payment.purpose === 'balance'
+    ? await paymentRepository.getPayoutByBookingId(payment.booking_id)
+    : null;
+  const commission = payout ? toAmount(payout.commission_amount) : 0;
   return {
+    purpose: payment.purpose,
+    method: payment.method,
     receiptNumber: `CL-${receipt.sequence_number}`,
     receiptUrl: receipt.receipt_url,
     paymentId: payment.id,
     bookingId: payment.booking_id,
     amount: toAmount(payment.amount),
     commission,
-    netToProvider: toAmount(payment.amount) - commission,
+    netToProvider: payout ? toAmount(payout.payout_amount) : null,
     issuedAt: receipt.created_at,
     currency: 'ZAR',
     status: payment.payment_status
@@ -175,6 +304,7 @@ export const processPayFastItn = async (notification, sourceIp) => {
       paid_at: new Date().toISOString()
     });
     await paymentRepository.createReceipt(payment.id);
+    await applyPaidPayment(updated);
     return { accepted: true, processed: true, payment: updated };
   }
 
@@ -182,6 +312,13 @@ export const processPayFastItn = async (notification, sourceIp) => {
     const updated = await paymentRepository.updatePayment(payment.id, ['pending'], {
       payment_status: 'failed',
       gateway_response_raw: notification
+    });
+    const { stateColumn } = purposeConfig(updated.purpose || 'booking_fee');
+    await paymentRepository.updateBookingPaymentState(updated.booking_id, { [stateColumn]: 'pending' }, {
+      [stateColumn]: 'failed'
+    }).catch((error) => {
+      // Booking already moved on (e.g. a retry was paid): nothing to do. Anything else is a real error.
+      if (!(error instanceof ConflictError)) throw error;
     });
     return { accepted: true, processed: true, payment: updated };
   }
@@ -196,14 +333,19 @@ export const processRefund = async (actor, paymentId) => {
   if (!payment.transaction_reference) throw new ConflictError('PayFast transaction reference is missing');
 
   await payfast.processRefund(payment.transaction_reference, payment.amount);
-  return paymentRepository.updatePayment(payment.id, ['paid'], {
+  const refunded = await paymentRepository.updatePayment(payment.id, ['paid'], {
     payment_status: 'refunded',
     refunded_amount: payment.amount
   });
+  const { stateColumn } = purposeConfig(payment.purpose || 'booking_fee');
+  await paymentRepository.updateBookingPaymentState(payment.booking_id, {}, { [stateColumn]: 'refunded' });
+  return refunded;
 };
 
 export default {
   createPaymentIntent,
+  recordCashBalance,
+  refundBookingFee,
   confirmPayment,
   getPayment,
   listPayments,

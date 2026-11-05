@@ -9,10 +9,10 @@ import { URLSearchParams } from 'url';
 import logger from '../utils/logger.js';
 import { ExternalServiceError } from '../utils/errors.js';
 
-const PAYFAST_MERCHANT_ID = process.env.PAYFAST_MERCHANT_ID;
-const PAYFAST_MERCHANT_KEY = process.env.PAYFAST_MERCHANT_KEY;
-const PAYFAST_API_KEY = process.env.PAYFAST_API_KEY;
-const PAYFAST_PASSPHRASE = process.env.PAYFAST_PASSPHRASE;
+const { PAYFAST_MERCHANT_ID } = process.env;
+const { PAYFAST_MERCHANT_KEY } = process.env;
+const { PAYFAST_API_KEY } = process.env;
+const { PAYFAST_PASSPHRASE } = process.env;
 
 const SANDBOX_URL = 'https://sandbox.payfast.co.za';
 const LIVE_URL = 'https://www.payfast.co.za';

@@ -1,6 +1,12 @@
 /**
  * Supabase Configuration
- * Initializes the Supabase client for database, auth, and storage operations
+ *
+ * - supabase:      publishable/anon key, respects RLS. Used for auth calls (sign-in, token checks).
+ * - supabaseAdmin: service-role/secret key, BYPASSES RLS. Used by every repository, so the backend
+ *                  itself must enforce ownership and roles.
+ *
+ * Both keys are required. We fail fast at startup instead of silently falling back to the anon key,
+ * which would make every repository query run under RLS with no user (empty results / permission errors).
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -14,35 +20,38 @@ const supabaseKey = process.env.SUPABASE_KEY
   || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
   || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  || process.env.SUPABASE_SECRET_KEY
-  || process.env.SUPABASE_ADMIN_KEY
-  || process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY;
-const jwksUrl = process.env.SUPABASE_JWKS_URL || `${supabaseUrl}/auth/v1/.well-known/jwks.json`;
+  || process.env.SUPABASE_SECRET_KEY;
 
-if (!supabaseUrl || !supabaseKey) {
-  logger.error('Missing Supabase configuration (URL or key). Set SUPABASE_URL and SUPABASE_KEY, or NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.');
-  process.exit(1);
+const missing = [
+  !supabaseUrl && 'SUPABASE_URL',
+  !supabaseKey && 'SUPABASE_KEY',
+  !serviceRoleKey && 'SUPABASE_SERVICE_ROLE_KEY'
+].filter(Boolean);
+
+if (missing.length) {
+  const message = `Missing Supabase configuration: ${missing.join(', ')}. Set them in backend/.env.`;
+  logger.fatal(message);
+  throw new Error(message);
 }
 
-if (!serviceRoleKey) {
-  logger.warn('Missing SUPABASE service-role/secret key; admin client will fall back to the anon client until it is provided.');
+if (serviceRoleKey === supabaseKey) {
+  const message = 'SUPABASE_SERVICE_ROLE_KEY is the same as SUPABASE_KEY. Use the service-role/secret key.';
+  logger.fatal(message);
+  throw new Error(message);
 }
 
-// Client for general use (respects RLS policies)
-export const supabase = createClient(supabaseUrl, supabaseKey, {
+const serverAuthOptions = {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
     detectSessionInUrl: false
-  },
-  global: {
-    headers: {
-      ...(jwksUrl ? { 'x-jwks-url': jwksUrl } : {})
-    }
   }
-});
+};
 
-// Admin client (bypasses RLS policies). Fallback to the anon client until the service-role key is supplied.
-export const supabaseAdmin = serviceRoleKey ? createClient(supabaseUrl, serviceRoleKey) : supabase;
+// Client for general use (respects RLS policies)
+export const supabase = createClient(supabaseUrl, supabaseKey, serverAuthOptions);
+
+// Admin client (bypasses RLS policies). Server-side only, never expose this key.
+export const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, serverAuthOptions);
 
 export default supabase;

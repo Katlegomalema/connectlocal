@@ -31,10 +31,6 @@ flowchart TB
         Realtime[Supabase Realtime]
     end
 
-    subgraph GoogleCloud["Google Cloud"]
-        Maps[Google Maps Platform]
-    end
-
     subgraph PayFastCloud["PayFast"]
         PF[Payment Gateway]
     end

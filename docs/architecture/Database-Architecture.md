@@ -42,9 +42,9 @@ Two access paths exist:
 This hybrid approach balances development speed (RLS for simple reads) with the correctness guarantees of centralized business logic (backend-mediated writes).
 
 ### 4.4 Migration Strategy
-- All schema changes are expressed as versioned, timestamped SQL files in `backend/migrations/` (e.g., `20260115_create_bookings_table.sql`).
-- Migrations are applied via the Supabase CLI (`supabase migration up`) and run automatically in the deployment pipeline before the new backend version is promoted.
-- Rollback scripts accompany every migration that alters or drops existing structures.
+- All schema changes are expressed as versioned SQL files in `backend/migrations/`.
+- `cd backend && npm run migrate` applies unapplied files transactionally and records them in `public.schema_migrations`; the command requires `DATABASE_URL`.
+- Review and test each migration against a staging Supabase project before applying it to production. Data-destructive changes require a reviewed backup and rollback plan.
 
 ### 4.5 Indexing Strategy (Summary)
 See ERD document for the full per-table index list. Key indexes:

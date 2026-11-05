@@ -21,7 +21,7 @@ export const validateBody = (schema) => async (req, res, next) => {
       path: req.path
     });
 
-    const formattedErrors = error.errors.map(e => ({
+    const formattedErrors = error.errors.map((e) => ({
       field: e.path.join('.') || 'root',
       message: e.message
     }));
@@ -45,7 +45,7 @@ export const validateQuery = (schema) => async (req, res, next) => {
       path: req.path
     });
 
-    const formattedErrors = error.errors.map(e => ({
+    const formattedErrors = error.errors.map((e) => ({
       field: e.path.join('.') || 'root',
       message: e.message
     }));
@@ -69,11 +69,26 @@ export const validateParams = (schema) => async (req, res, next) => {
       path: req.path
     });
 
-    const formattedErrors = error.errors.map(e => ({
+    const formattedErrors = error.errors.map((e) => ({
       field: e.path.join('.') || 'root',
       message: e.message
     }));
 
     next(new ValidationError('Parameter validation failed', formattedErrors));
   }
+};
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const isUuid = (value) => typeof value === 'string' && UUID_PATTERN.test(value);
+
+/**
+ * router.param() handler: reject non-UUID ids with 400 before they reach the database.
+ * Usage: router.param('id', validateUuidParam);
+ */
+export const validateUuidParam = (req, res, next, value, name) => {
+  if (isUuid(value)) return next();
+  return next(new ValidationError(`Invalid ${name}: must be a UUID`, [
+    { field: name, message: 'Invalid ID format' }
+  ]));
 };

@@ -7,9 +7,9 @@ import twilio from 'twilio';
 import logger from '../utils/logger.js';
 import { ExternalServiceError } from '../utils/errors.js';
 
-const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
-const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
+const { TWILIO_ACCOUNT_SID } = process.env;
+const { TWILIO_AUTH_TOKEN } = process.env;
+const { TWILIO_PHONE_NUMBER } = process.env;
 
 let twilioClient;
 

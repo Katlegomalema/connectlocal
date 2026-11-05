@@ -4,7 +4,7 @@
 
 This document describes the planned program logic for ConnectLocal. It is a design-level guide, not production source code. It covers the main customer, provider, and administrator workflows across the Flutter client, Express API, Supabase services, and external integrations.
 
-The backend is a modular monolith: API routes validate and authorize requests, service modules apply business rules, repositories perform database operations, and integrations communicate with Supabase, Google Maps, PayFast, and the push-notification provider.
+The backend is a modular monolith: API routes validate and authorize requests, service modules apply business rules, repositories perform database operations, and integrations communicate with Supabase, PayFast, and the push-notification provider. Provider radius searches run in PostGIS over coordinates supplied by the Flutter client.
 
 ## 2. System Entry and Request Handling
 
@@ -102,7 +102,7 @@ END PROCEDURE
 PROCEDURE SearchProviders(customer, location, radius, filters, page)
     VALIDATE location, radius, filters, and page
     IF location is an address rather than coordinates THEN
-        location <- GEOCODE address with Google Maps
+        location <- ACCEPT selected coordinates from the client
     END IF
 
     providers <- QUERY database for providers that are:

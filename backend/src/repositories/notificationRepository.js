@@ -17,6 +17,18 @@ export const createNotification = async (notification) => {
   return data;
 };
 
+export const markNotificationPushed = async (notificationId) => {
+  const { data, error } = await supabase
+    .from('notifications')
+    .update({ is_pushed: true })
+    .eq('id', notificationId)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+};
+
 export const listNotifications = async (userId, { unreadOnly, page, limit }) => {
   let query = supabase
     .from('notifications')
@@ -78,6 +90,7 @@ export const deleteNotification = async (userId, notificationId) => {
 
 export default {
   createNotification,
+  markNotificationPushed,
   listNotifications,
   markNotificationRead,
   markAllNotificationsRead,

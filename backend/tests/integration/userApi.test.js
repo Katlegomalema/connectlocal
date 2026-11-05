@@ -1,52 +1,19 @@
-/**
- * User API Integration Tests
- * End-to-end tests for user endpoints
- */
-
 import request from 'supertest';
 import app from '../../src/app.js';
 
-describe('User API Endpoints', () => {
-  let authToken;
-  let userId;
+describe('Protected user REST endpoints', () => {
+  test('requires authentication before updating a user profile', async () => {
+    const response = await request(app)
+      .put('/api/v1/users/00000000-0000-4000-8000-000000000001')
+      .send({ fullName: 'Updated Name' });
 
-  beforeAll(async () => {
-    // Set up authentication
-    // Obtain auth token
+    expect(response.status).toBe(401);
   });
 
-  describe('GET /api/v1/users/:id', () => {
-    test('should fetch user profile', async () => {
-      const response = await request(app)
-        .get(`/api/v1/users/${userId}`)
-        .set('Authorization', `Bearer ${authToken}`);
+  test('requires authentication before deleting a user account', async () => {
+    const response = await request(app)
+      .delete('/api/v1/users/00000000-0000-4000-8000-000000000001');
 
-      // Add assertions
-      expect(response.status).toBeLessThan(500);
-    });
-
-    test('should return 404 for non-existent user', async () => {
-      const response = await request(app)
-        .get('/api/v1/users/non-existent-id')
-        .set('Authorization', `Bearer ${authToken}`);
-
-      // Add assertions
-      expect(response.status).toBeLessThan(500);
-    });
-  });
-
-  describe('PUT /api/v1/users/:id', () => {
-    test('should update user profile', async () => {
-      const response = await request(app)
-        .put(`/api/v1/users/${userId}`)
-        .set('Authorization', `Bearer ${authToken}`)
-        .send({
-          name: 'Updated Name',
-          phone: '+27123456789'
-        });
-
-      // Add assertions
-      expect(response.status).toBeLessThan(500);
-    });
+    expect(response.status).toBe(401);
   });
 });

@@ -36,7 +36,7 @@ describe('POST /api/v1/bookings', () => {
 ```
 
 ### 4.2 External Service Integration Testing
-- **Google Maps:** Integration tests use a sandbox/test API key with a small, controlled set of known coordinates to assert distance/geocoding responses without excessive quota usage.
+- **Nearby search:** Integration tests use deterministic provider coordinates in the test database to verify PostGIS radius boundaries and returned distances. No external map API is called.
 - **PayFast:** All integration tests run exclusively against PayFast's sandbox environment; production credentials are never used in automated tests.
 - **Supabase Realtime:** Messaging delivery is integration-tested by asserting the message row is persisted and a Realtime event is emitted, using a test subscriber client.
 
@@ -45,10 +45,10 @@ describe('POST /api/v1/bookings', () => {
 - The test database is fully reset between test suite runs via migration re-application in CI.
 
 ## 5. Assumptions
-- CI runners have network access to the sandbox Supabase, Google Maps, and PayFast environments (secrets provisioned via GitHub Actions secrets).
+- CI runners have network access to the sandbox Supabase and PayFast environments (secrets provisioned via GitHub Actions secrets).
 
 ## 6. Constraints
-- Google Maps sandbox testing is deliberately minimal to conserve the free-tier query quota shared with manual development testing.
+- Map rendering is tested in the Flutter client; backend location tests do not depend on map tiles.
 
 ## 7. Future Enhancements
 - Contract testing (e.g., Pact) between the Flutter client and backend API to catch breaking changes automatically.

@@ -7,7 +7,7 @@ import sgMail from '@sendgrid/mail';
 import logger from '../utils/logger.js';
 import { ExternalServiceError } from '../utils/errors.js';
 
-const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+const { SENDGRID_API_KEY } = process.env;
 const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@connectlocal.app';
 
 if (SENDGRID_API_KEY) {

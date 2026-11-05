@@ -62,7 +62,7 @@ backend/
 │   │   └── validators.js   # Zod validation schemas
 │   │
 │   └── integrations/       # External service integrations
-│       ├── google-maps.js  # Google Maps API
+│       ├── payfast.js      # PayFast API
 │       ├── payfast.js      # PayFast payment gateway
 │       ├── firebase.js     # Push notifications
 │       └── sendgrid.js     # Email service
@@ -167,7 +167,6 @@ SUPABASE_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
 
 # External APIs
-GOOGLE_MAPS_API_KEY=...
 PAYFAST_MERCHANT_ID=...
 FIREBASE_PROJECT_ID=...
 ```

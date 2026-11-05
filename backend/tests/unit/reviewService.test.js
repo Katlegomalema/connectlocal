@@ -26,7 +26,8 @@ describe('Review service', () => {
       id: 'booking-1',
       customer_id: 'customer-1',
       provider_id: 'provider-1',
-      status: 'completed'
+      status: 'completed',
+      balance_status: 'paid'
     });
     repository.createReview.mockResolvedValue({ id: 'review-1', rating: 5 });
     repository.refreshProviderRating.mockResolvedValue({ averageRating: 5, reviewCount: 1 });
@@ -41,11 +42,22 @@ describe('Review service', () => {
       customer_id: 'customer-1',
       provider_id: 'provider-1',
       rating: 5,
-      comment: 'Great service',
-      moderation_status: 'visible'
+      review_text: 'Great service',
+      is_flagged: false
     });
     expect(repository.refreshProviderRating).toHaveBeenCalledWith('provider-1');
     expect(result.id).toBe('review-1');
+  });
+
+  test('rejects reviews until the balance is paid', async () => {
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', customer_id: 'customer-1', provider_id: 'provider-1', status: 'completed', balance_status: 'pending'
+    });
+    await expect(reviewService.createReview(
+      { id: 'customer-1', role: 'customer' },
+      { bookingId: 'booking-1', rating: 5 }
+    )).rejects.toThrow('balance is paid');
+    expect(repository.createReview).not.toHaveBeenCalled();
   });
 
   test('rejects reviews for bookings that are not complete', async () => {

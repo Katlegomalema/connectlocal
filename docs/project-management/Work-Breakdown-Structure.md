@@ -32,7 +32,7 @@ Covers all work packages from requirements analysis through deployment, mapped t
 
 4. Core Marketplace Development
    4.1 User & Provider Profile Module
-   4.2 Location & Search Module (Google Maps integration)
+   4.2 Location & Search Module (PostGIS API search and client-rendered Flutter maps)
    4.3 Service Management Module
 
 5. Transaction Development

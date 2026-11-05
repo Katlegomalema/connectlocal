@@ -28,7 +28,7 @@ export const getBookingById = async (bookingId) => {
 export const getServiceById = async (serviceId) => {
   const { data, error } = await supabase
     .from('services')
-    .select('id, provider_id, base_price, duration_minutes, active, min_notice_hours')
+    .select('id, provider_id, base_price, duration_minutes, active, min_notice_hours, pricing_type')
     .eq('id', serviceId)
     .maybeSingle();
 
@@ -46,6 +46,31 @@ export const getProviderById = async (providerId) => {
 
   if (error) throw error;
   if (!data) throw new NotFoundError('Provider not found');
+  return data;
+};
+
+export const getPackageById = async (packageId) => {
+  const { data, error } = await supabase
+    .from('service_packages')
+    .select('id, service_id, name, price, duration_minutes, is_active')
+    .eq('id', packageId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) throw new NotFoundError('Package not found');
+  return data;
+};
+
+/** Verification flags needed before a customer may book. */
+export const getCustomerById = async (userId) => {
+  const { data, error } = await supabase
+    .from('users')
+    .select('id, role, email_verified, phone_verified, is_active, deleted_at')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data || !data.is_active || data.deleted_at) throw new NotFoundError('User not found');
   return data;
 };
 
@@ -89,21 +114,25 @@ export const createBooking = async (bookingData) => {
   return data;
 };
 
-export const updateBooking = async (bookingId, allowedStatuses, updates) => {
-  const { data, error } = await supabase
+export const updateBooking = async (bookingId, allowedStatuses, updates, expected = {}) => {
+  let query = supabase
     .from('bookings')
     .update(updates)
     .eq('id', bookingId)
-    .in('status', allowedStatuses)
-    .select('*')
-    .maybeSingle();
+    .in('status', allowedStatuses);
+  // Optimistic concurrency: only update if these columns still have the values we read.
+  for (const [column, value] of Object.entries(expected)) query = query.eq(column, value);
+
+  const { data, error } = await query.select('*').maybeSingle();
 
   if (error) throwDatabaseError(error);
   if (!data) throw new ConflictError('Booking status changed; reload and try again');
   return data;
 };
 
-export const listBookings = async ({ customerId, providerId, status, page, limit }) => {
+export const listBookings = async ({
+  customerId, providerId, status, page, limit
+}) => {
   let query = supabase
     .from('bookings')
     .select('*', { count: 'exact' })
@@ -129,6 +158,8 @@ export default {
   getBookingById,
   getServiceById,
   getProviderById,
+  getPackageById,
+  getCustomerById,
   getProviderByUserId,
   hasBookingConflict,
   createBooking,

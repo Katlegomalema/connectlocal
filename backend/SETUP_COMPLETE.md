@@ -64,7 +64,7 @@ Your ConnectLocal backend has been successfully created with a complete, product
 - ✅ **helpers.js** — Utility functions (distance calculation, formatting, etc.)
 
 ### External Integrations (`src/integrations/`)
-- ✅ **googleMaps.js** — Google Maps API client
+- ✅ **PostGIS provider search** — server-side radius query over client-supplied coordinates
 - ✅ **payfast.js** — PayFast payment gateway integration
 - ✅ **firebase.js** — Firebase push notifications
 - ✅ **sendgrid.js** — SendGrid email service
@@ -142,7 +142,7 @@ Request → Routes → Controllers → Services → Repositories → Database
            ↓
         Middleware (Auth, Validation, Error Handling)
            ↓
-        External Services (Supabase, Google Maps, PayFast, etc.)
+        External Services (Supabase, PayFast, etc.)
 ```
 
 ### Layering Benefits
@@ -173,7 +173,7 @@ Request → Routes → Controllers → Services → Repositories → Database
 - `SUPABASE_SERVICE_ROLE_KEY` — Supabase service role key
 
 **Optional (for features):**
-- `GOOGLE_MAPS_API_KEY` — Google Maps API
+- `DATABASE_URL` — direct Supabase PostgreSQL connection for migrations
 - `PAYFAST_MERCHANT_ID`, `PAYFAST_MERCHANT_KEY` — PayFast payment
 - `FIREBASE_PROJECT_ID` — Firebase notifications
 - `SENDGRID_API_KEY` — SendGrid email
@@ -193,7 +193,7 @@ See `.env.example` for all options.
 - ✅ Database abstraction (repositories)
 - ✅ Service layer pattern
 - ✅ Test setup (Jest + Supertest)
-- ✅ External API integrations (Google Maps, PayFast, Firebase, SendGrid, Twilio)
+- ✅ External API integrations (PayFast, Firebase, SendGrid, Twilio)
 - ✅ Migration system template
 - ✅ ESLint configuration
 - ✅ Comprehensive documentation

@@ -24,7 +24,7 @@ const getActiveProfile = async (authUser) => {
     throw error;
   }
 
-    if (!profile.is_active || profile.deleted_at) throw new AuthenticationError('Account is not active');
+  if (!profile.is_active || profile.deleted_at) throw new AuthenticationError('Account is not active');
   return {
     id: authUser.id,
     email: authUser.email,
