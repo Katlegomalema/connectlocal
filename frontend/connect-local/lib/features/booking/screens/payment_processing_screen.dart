@@ -54,7 +54,7 @@ class _PaymentProcessingScreenState extends State<PaymentProcessingScreen> {
 
   double get _amount => widget.request?.fee ?? widget.balanceFor!.balance;
   String get _item => widget.request != null
-      ? 'Deposit: ${widget.request!.serviceName}'
+      ? 'Booking fee: ${widget.request!.serviceName}'
       : 'Service: ${widget.balanceFor!.serviceName}';
 
   @override
@@ -85,6 +85,7 @@ class _PaymentProcessingScreenState extends State<PaymentProcessingScreen> {
             time: request.time,
             hours: request.hours,
             address: request.address,
+            atBusiness: request.atBusiness,
             packageName: request.packageName,
             latitude: request.latitude,
             longitude: request.longitude,

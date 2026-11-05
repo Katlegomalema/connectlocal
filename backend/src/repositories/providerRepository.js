@@ -366,7 +366,8 @@ export const searchProvidersByLocation = async (latitude, longitude, radiusKm = 
 export const searchProvidersByText = async (queryText, { category, page, limit }) => {
   let query = supabase
     .from('providers')
-    .select('id, user_id, business_name, business_description, city, province, service_radius_km, rating_average, rating_count, location', { count: 'exact' })
+    .select('id, user_id, business_name, business_description, street_address, suburb, city, province, service_radius_km, '
+      + 'rating_average, rating_count, location, offers_visit, offers_house_call, slot_minutes', { count: 'exact' })
     .eq('verification_status', 'verified')
     .eq('is_active', true);
 

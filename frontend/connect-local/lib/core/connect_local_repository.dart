@@ -82,9 +82,16 @@ class ConnectLocalRepository {
       distanceIsLive: json['distance_km'] != null,
       latitude: _toDouble(json['latitude']),
       longitude: _toDouble(json['longitude']),
+      address: [json['street_address'], json['suburb'], json['city']]
+          .whereType<String>()
+          .map((part) => part.trim())
+          .where((part) => part.isNotEmpty)
+          .join(', '),
+      // Booking options. Until the API sends these, every provider does house calls only.
+      offersVisit: json['offers_visit'] == true,
+      offersHouseCall: json['offers_house_call'] != false,
       verified: json['verified'] == true || json['verification_status'] == 'verified',
       description: (json['business_description'] as String?) ?? (json['description'] as String?) ?? '',
-      address: (json['street_address'] as String?) ?? '',
       services: [
         for (final s in (json['services'] as List? ?? const []))
           if (s is Map<String, dynamic>) serviceFromJson(s),
@@ -315,6 +322,7 @@ class ConnectLocalRepository {
     required String serviceId,
     required DateTime scheduledStart,
     required String address,
+    bool atBusiness = false,
     int? hours,
     String? packageId,
     double? latitude,
@@ -325,15 +333,40 @@ class ConnectLocalRepository {
       'providerId': providerId,
       'serviceId': serviceId,
       'scheduledStart': scheduledStart.toUtc().toIso8601String(),
-      'address': address,
+      if (atBusiness) 'atBusiness': true,
+      // A business visit happens at the business; only a house call sends the customer's address and map point.
+      if (!atBusiness) 'address': address,
       'hours': ?hours,
       'packageId': ?packageId,
-      if (latitude != null && longitude != null) 'latitude': latitude,
-      if (latitude != null && longitude != null) 'longitude': longitude,
+      if (!atBusiness && latitude != null && longitude != null) 'latitude': latitude,
+      if (!atBusiness && latitude != null && longitude != null) 'longitude': longitude,
       if (notes.trim().isNotEmpty) 'notes': notes.trim(),
     }));
     return data;
   }
+
+  // ---- booking options, working hours, taken times ---------------------------------------------------
+  /// A provider's booking options, working hours and the times already taken (public).
+  Future<ProviderSchedule> providerSchedule(String providerId) async =>
+      ProviderSchedule.fromJson(ApiClient.dataOf(await api.get('/providers/$providerId/schedule', auth: false)));
+
+  /// The signed-in provider's own options and hours.
+  Future<ProviderSchedule> mySchedule() async =>
+      ProviderSchedule.fromJson((ApiClient.dataOf(await api.get('/providers/me/schedule'))['schedule'] as Map)
+          .cast<String, dynamic>());
+
+  /// Saves the signed-in provider's options and/or hours (only what is given).
+  Future<ProviderSchedule> saveMySchedule({bool? offersVisit, bool? offersHouseCall, WorkingHours? hours}) async =>
+      ProviderSchedule.fromJson((ApiClient.dataOf(await api.put('/providers/me/schedule', body: {
+        'offersVisit': ?offersVisit,
+        'offersHouseCall': ?offersHouseCall,
+        if (hours != null) 'slotMinutes': hours.slotMinutes,
+        if (hours != null)
+          'workingHours': [
+            for (final e in hours.days.entries) {'day': e.key, 'open': e.value.open, 'close': e.value.close},
+          ],
+      }))['schedule'] as Map)
+          .cast<String, dynamic>());
 
   /// The signed-in person's bookings (customer: theirs; provider: made with their business).
   Future<List<Map<String, dynamic>>> myBookings() async {
@@ -701,4 +734,45 @@ class ConnectLocalRepository {
         String s => double.tryParse(s),
         _ => null,
       };
+}
+
+/// What GET /providers/:id/schedule answers: how the provider can be booked and which times are taken.
+class ProviderSchedule {
+  final bool offersVisit;
+  final bool offersHouseCall;
+  final WorkingHours hours;
+
+  /// Times held by bookings (start, length in minutes). No customer details.
+  final List<({DateTime start, int minutes})> busy;
+
+  const ProviderSchedule({
+    required this.offersVisit,
+    required this.offersHouseCall,
+    required this.hours,
+    this.busy = const [],
+  });
+
+  factory ProviderSchedule.fromJson(Map<String, dynamic> json) {
+    final days = <int, DayHours>{};
+    for (final h in (json['workingHours'] as List? ?? const [])) {
+      if (h is! Map) continue;
+      final day = (h['day'] as num?)?.toInt();
+      final open = (h['open'] as num?)?.toInt();
+      final close = (h['close'] as num?)?.toInt();
+      if (day != null && open != null && close != null && close > open) days[day] = DayHours(open, close);
+    }
+    return ProviderSchedule(
+      offersVisit: json['offersVisit'] == true,
+      offersHouseCall: json['offersHouseCall'] != false,
+      hours: WorkingHours(days: days, slotMinutes: (json['slotMinutes'] as num?)?.toInt() ?? 60),
+      busy: [
+        for (final b in (json['busy'] as List? ?? const []))
+          if (b is Map && DateTime.tryParse('${b['start']}') != null && DateTime.tryParse('${b['end']}') != null)
+            (
+              start: DateTime.parse('${b['start']}').toLocal(),
+              minutes: DateTime.parse('${b['end']}').difference(DateTime.parse('${b['start']}')).inMinutes,
+            ),
+      ],
+    );
+  }
 }

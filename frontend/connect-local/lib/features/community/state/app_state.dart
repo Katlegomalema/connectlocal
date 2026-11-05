@@ -38,15 +38,38 @@ const int kMaxPinAttempts = 5;
 class AppState extends ChangeNotifier {
   AppState();
 
-  /// Category names, replaced with the server's list by [loadFromServer].
-  static List<String> categories = <String>[
-    'Home Repair',
-    'Cleaning',
-    'Beauty',
-    'Tutoring',
-    'Gardening',
-    'Security',
+  /// The ConnectLocal service categories, in the order the app shows them ("Other" always last).
+  /// The database has the same list (supabase/migrations/20261105200000_connectlocal_categories.sql).
+  static const List<String> kCategories = <String>[
+    'Beauty & Health',
+    'Healthcare',
+    'Plumbing',
+    'Cleaning Services',
+    'Education & Tutoring',
+    'Automotive Services',
+    'Electrical Services',
+    'Events & Photography',
+    'Home Maintenance',
+    'Other',
   ];
+
+  /// Category names shown in the app. [loadFromServer] replaces them with the server's active
+  /// categories, sorted in the [kCategories] order (unknown names just before "Other").
+  static List<String> categories = List.of(kCategories);
+
+  /// Sorts category names in the [kCategories] order.
+  static List<String> sortCategories(Iterable<String> names) {
+    String key(String name) => name.trim().toLowerCase();
+    final byKey = {for (final n in names) key(n): n};
+    final known = [
+      for (final c in kCategories)
+        if (byKey.containsKey(key(c))) byKey[key(c)]!,
+    ];
+    final other = known.isNotEmpty && key(known.last) == 'other' ? [known.removeLast()] : <String>[];
+    final knownKeys = {for (final c in kCategories) key(c)};
+    final unknown = [for (final n in byKey.values) if (!knownKeys.contains(key(n))) n];
+    return [...known, ...unknown, ...other];
+  }
 
   /// The ConnectLocal API (set in main.dart / main_admin.dart).
   ConnectLocalRepository? repository;
@@ -147,6 +170,7 @@ class AppState extends ChangeNotifier {
     _conversations.clear();
     _notifications.clear();
     _reviews.clear();
+    _busy.clear();
     payments.clear();
     payouts.clear();
     _payoutAccount = null;
@@ -298,7 +322,7 @@ class AppState extends ChangeNotifier {
     if (repo == null) return;
     try {
       final serverCategories = await repo.categories();
-      if (serverCategories.isNotEmpty) categories = [for (final c in serverCategories) c.name];
+      if (serverCategories.isNotEmpty) categories = sortCategories([for (final c in serverCategories) c.name]);
       final listed = await repo.searchProviders();
       _listed
         ..clear()
@@ -363,6 +387,7 @@ class AppState extends ChangeNotifier {
       businessDescription = business.description;
       businessLocation = business.address;
       isProvider = server.isApproved;
+      _applySchedule(business, await repo.mySchedule());
       if (isProvider) {
         await Future.wait([refreshPayouts(), loadReviews(business.id)]);
       }
@@ -444,6 +469,75 @@ class AppState extends ChangeNotifier {
     activeProvider.avatar = url == null ? photo : PhotoRef(url: url, name: photo.name);
     notifyListeners();
     return null;
+  }
+
+  // ---- booking options, working hours and time slots ----------------------------------------------------
+  /// Times taken at each provider (from the server; start + minutes, no customer details).
+  final Map<String, List<({DateTime start, int minutes})>> _busy = {};
+
+  void _applySchedule(ProviderModel provider, ProviderSchedule schedule) {
+    provider
+      ..offersVisit = schedule.offersVisit
+      ..offersHouseCall = schedule.offersHouseCall
+      ..workingHours = schedule.hours;
+  }
+
+  /// Loads a provider's booking options, hours and taken times (call when their profile or booking
+  /// screen opens). Returns an error message, or null.
+  Future<String?> loadSchedule(String providerId) => _attempt((r) async {
+        final schedule = await r.providerSchedule(providerId);
+        _applySchedule(providerById(providerId), schedule);
+        _busy[providerId] = schedule.busy;
+        notifyListeners();
+      });
+
+  /// Tests: the taken times as GET /providers/:id/schedule would send them.
+  @visibleForTesting
+  void setBusyTimes(String providerId, List<({DateTime start, int minutes})> busy) {
+    _busy[providerId] = busy;
+    notifyListeners();
+  }
+
+  /// True when [minutes] from [start] are free with this provider: inside working hours, and at least
+  /// [kBookingGapMinutes] away from every other booking that still holds its slot (before and after).
+  /// The server checks the same rule again when the booking is made.
+  bool slotIsFree(String providerId, DateTime start, int minutes) {
+    final provider = providerById(providerId);
+    if (!provider.workingHours.fitsInDay(start, minutes)) return false;
+    bool clashes(DateTime otherStart, int otherMinutes) =>
+        timesOverlap(otherStart, otherMinutes + kBookingGapMinutes, start, minutes + kBookingGapMinutes);
+    final taken = _busy[providerId] ?? const [];
+    // Also this person's own bookings (e.g. one made a moment ago, before the list was reloaded).
+    return !taken.any((b) => clashes(b.start, b.minutes)) &&
+        !_bookings.any((b) => b.providerId == providerId && b.holdsSlot && clashes(b.dateTime, b.blockedMinutes));
+  }
+
+  /// The slots of [day] that have not started yet, each with whether a booking of [minutes] can start
+  /// there (false = booked by someone else, or not enough time before closing).
+  List<({DateTime start, bool free})> slotsFor(String providerId, DateTime day, int minutes) {
+    final now = DateTime.now();
+    return [
+      for (final start in providerById(providerId).workingHours.slotStarts(day))
+        if (start.isAfter(now)) (start: start, free: slotIsFree(providerId, start, minutes)),
+    ];
+  }
+
+  /// The provider's own working hours and slot length (saved on the server). Returns an error, or null.
+  Future<String?> setWorkingHours(WorkingHours hours) => _attempt((r) async {
+        _applySchedule(activeProvider, await r.saveMySchedule(hours: hours));
+        notifyListeners();
+      });
+
+  /// Which booking options the provider offers. At least one must stay on. Returns an error, or null.
+  Future<String?> setBookingOptions({required bool visit, required bool houseCall}) async {
+    if (!visit && !houseCall) return 'Choose at least one way customers can book you.';
+    if (visit && !activeProvider.hasBusinessLocation) {
+      return 'Add your business address first, so customers can find you.';
+    }
+    return _attempt((r) async {
+      _applySchedule(activeProvider, await r.saveMySchedule(offersVisit: visit, offersHouseCall: houseCall));
+      notifyListeners();
+    });
   }
 
   // ---- services (provider) -------------------------------------------------------------------------------
@@ -662,6 +756,8 @@ class AppState extends ChangeNotifier {
           bookingFee: _num(json['booking_fee_amount']),
           address: (json['service_address'] as String?) ?? '',
           notes: (json['notes'] as String?) ?? '',
+          atBusiness: json['at_business'] == true,
+          blockedMinutes: _blockedMinutesOf(json),
         );
     if (existing == null) {
       booking
@@ -692,6 +788,14 @@ class AppState extends ChangeNotifier {
     return booking;
   }
 
+  /// How long a server booking holds the provider's time (end - start; falls back to its duration).
+  static int _blockedMinutesOf(Map<String, dynamic> json) {
+    final start = DateTime.tryParse((json['scheduled_start'] as String?) ?? '');
+    final end = DateTime.tryParse((json['scheduled_end'] as String?) ?? '');
+    if (start != null && end != null && end.isAfter(start)) return end.difference(start).inMinutes;
+    return (json['duration_minutes_at_booking'] as num?)?.toInt() ?? 60;
+  }
+
   /// Reloads the signed-in person's bookings; customers also get the PIN for accepted bookings.
   Future<String?> refreshBookings() async {
     final repo = repository;
@@ -720,6 +824,7 @@ class AppState extends ChangeNotifier {
     required String time,
     required int hours,
     required String address,
+    bool atBusiness = false,
     String? packageName,
     double? latitude,
     double? longitude,
@@ -732,14 +837,17 @@ class AppState extends ChangeNotifier {
       serviceId: serviceId,
       scheduledStart: _parseDateTime(date, time),
       address: address,
+      atBusiness: atBusiness,
       hours: service?.pricingType == PricingType.hourly ? hours : null,
       packageId: packageId,
       latitude: latitude,
       longitude: longitude,
       notes: notes,
     );
-    if (address.trim().isNotEmpty) customerAddress = address.trim();
+    // House call: remember the customer's address for next time. A business visit has no customer address.
+    if (!atBusiness && address.trim().isNotEmpty) customerAddress = address.trim();
     final booking = _fromServer(json);
+    unawaited(loadSchedule(providerId)); // the slot is now taken
     notifyListeners();
     return booking;
   }

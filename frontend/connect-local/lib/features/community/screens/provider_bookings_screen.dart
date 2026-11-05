@@ -107,9 +107,11 @@ class _ProviderBookingsScreenState extends State<ProviderBookingsScreen> {
               '${booking.serviceName} · ${booking.quantityLabel}',
           date: formatDate(booking.dateTime),
           time: formatTime(booking.dateTime),
-          location: booking.address.isEmpty
-              ? '${booking.distanceKm.toStringAsFixed(0)} km away'
-              : booking.address,
+          location: booking.atBusiness
+              ? 'Customer visits your business'
+              : booking.address.isEmpty
+                  ? 'House call, ${booking.distanceKm.toStringAsFixed(0)} km away'
+                  : 'House call: ${booking.address}',
           total: money(booking.price),
           notes: booking.notes,
           showActions: pending,
@@ -142,8 +144,13 @@ class _ProviderBookingsScreenState extends State<ProviderBookingsScreen> {
                         }
                       : null,
           onChat: () => _openChat(context, booking),
-          onDirections: () => openDirectionsTo(context,
-              lat: booking.latitude, lng: booking.longitude, address: booking.address),
+          customerLatitude: booking.atBusiness ? null : booking.latitude,
+          customerLongitude: booking.atBusiness ? null : booking.longitude,
+          // Directions only for a house call (for a visit, the customer comes to you).
+          onDirections: booking.atBusiness
+              ? null
+              : () => openDirectionsTo(context,
+                  lat: booking.latitude, lng: booking.longitude, address: booking.address),
         ),
       ),
     );

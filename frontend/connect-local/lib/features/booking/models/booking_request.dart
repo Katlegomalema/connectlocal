@@ -15,6 +15,14 @@ class BookingRequest {
   final String? packageName;
   final String date;
   final String time;
+
+  /// True = the customer visits the business / salon; false = house call (provider comes to [address]).
+  final bool atBusiness;
+
+  /// How long the booked time slot is (one slot, or the hours of a per-hour service).
+  final int blockedMinutes;
+
+  /// House call: the customer's address. Business visit: the business address (for the summary).
   final String address;
 
   /// The customer's spot on the map (optional).
@@ -32,6 +40,8 @@ class BookingRequest {
     this.packageName,
     required this.date,
     required this.time,
+    this.atBusiness = false,
+    this.blockedMinutes = 60,
     required this.address,
     this.latitude,
     this.longitude,

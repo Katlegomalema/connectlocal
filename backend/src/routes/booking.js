@@ -18,13 +18,19 @@ const createBookingSchema = z.object({
   packageId: z.string().uuid().optional(), // for package-priced services
   hours: z.number().int().min(1).max(24)
     .optional(), // for hourly services
-  address: z.string().trim().min(5).max(300), // where the job happens
+  // true = the customer visits the business; false (default) = house call at [address]
+  atBusiness: z.boolean().optional(),
+  address: z.string().trim().min(5).max(300)
+    .optional(), // where the job happens (house call)
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
   notes: z.string().max(2000).optional()
 }).strict().refine((body) => (body.latitude === undefined) === (body.longitude === undefined), {
   message: 'Send both latitude and longitude, or neither',
   path: ['latitude']
+}).refine((body) => body.atBusiness === true || Boolean(body.address), {
+  message: 'Enter the address where the provider should come',
+  path: ['address']
 });
 const startSchema = z.object({ pin: z.string().regex(/^\d{4}$/, 'pin must be 4 digits') }).strict();
 

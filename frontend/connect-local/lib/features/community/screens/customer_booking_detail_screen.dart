@@ -4,7 +4,7 @@ import '../widgets/action_feedback.dart';
 
 import '../../booking/screens/payment_method_screen.dart';
 import '../../shared/brand.dart';
-import '../../shared/location_map.dart';
+import '../../shared/booking_maps.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
@@ -105,8 +105,14 @@ class CustomerBookingDetailScreen extends StatelessWidget {
                       children: [
                         _detail(Icons.calendar_today_outlined, 'Date', formatDate(b.dateTime)),
                         _detail(Icons.schedule_rounded, 'Time', formatTime(b.dateTime)),
-                        _detail(Icons.location_on_outlined, 'Address',
-                            b.address.isEmpty ? 'Not provided' : b.address),
+                        _detail(b.atBusiness ? Icons.storefront_outlined : Icons.home_outlined, 'Type',
+                            b.locationTypeLabel),
+                        if (b.atBusiness)
+                          _detail(Icons.location_on_outlined, 'Business address',
+                              provider.address.isEmpty ? 'See the map below' : provider.address)
+                        else
+                          _detail(Icons.location_on_outlined, 'Your address',
+                              b.address.isEmpty ? 'Not provided' : b.address),
                         if (b.notes.isNotEmpty)
                           _detail(Icons.notes_rounded, 'Notes', b.notes),
                       ],
@@ -121,7 +127,7 @@ class CustomerBookingDetailScreen extends StatelessWidget {
                     child: Column(
                       children: [
                         _money(
-                          'Deposit (${(kBookingFeeRate * 100).round()}%, counts toward the price)',
+                          'Booking fee (${(kBookingFeeRate * 100).round()}%, counts toward the price)',
                           money(b.bookingFee),
                           b.feeRefunded
                               ? StatusChip('Refunded', color: AppColors.muted)
@@ -148,31 +154,23 @@ class CustomerBookingDetailScreen extends StatelessWidget {
                     ),
                   ),
 
-                  // ---- provider location ----
-                  if (provider.latitude != null && provider.longitude != null) ...[
+                  // ---- map: Business Location Map (visit) or Customer Location Map (house call) ----
+                  if (b.atBusiness && provider.hasBusinessLocation) ...[
                     const SizedBox(height: 22),
-                    const SectionTitle('Provider location'),
-                    const SizedBox(height: 10),
-                    LocationMap(
-                      height: 160,
-                      interactive: false,
-                      pins: [
-                        MapPin(
-                          id: provider.id,
-                          latitude: provider.latitude!,
-                          longitude: provider.longitude!,
-                          label: provider.name,
-                        ),
-                      ],
-                      onTap: () =>
-                          openDirections(context, provider.latitude!, provider.longitude!),
+                    BusinessLocationMap(
+                      businessId: provider.id,
+                      businessName: provider.name,
+                      address: provider.address,
+                      latitude: provider.latitude,
+                      longitude: provider.longitude,
                     ),
-                    const SizedBox(height: 10),
-                    OutlinedButton.icon(
-                      onPressed: () =>
-                          openDirections(context, provider.latitude!, provider.longitude!),
-                      icon: const Icon(Icons.directions_outlined, size: 20),
-                      label: const Text('Get directions to the provider'),
+                  ] else if (!b.atBusiness && b.latitude != null && b.longitude != null) ...[
+                    const SizedBox(height: 22),
+                    CustomerLocationMap(
+                      latitude: b.latitude!,
+                      longitude: b.longitude!,
+                      title: 'Where the provider will come',
+                      address: b.address,
                     ),
                   ],
                   const SizedBox(height: 18),
@@ -274,8 +272,8 @@ class CustomerBookingDetailScreen extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         title: const Text('Cancel this booking?'),
         content: Text(pending
-            ? 'Your deposit of ${money(b.bookingFee)} will be refunded.'
-            : 'The provider already accepted, so the deposit of ${money(b.bookingFee)} '
+            ? 'Your booking fee of ${money(b.bookingFee)} will be refunded.'
+            : 'The provider already accepted, so the booking fee of ${money(b.bookingFee)} '
                 'is non-refundable.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep booking')),
@@ -364,7 +362,7 @@ class _NextStep extends StatelessWidget {
         icon = Icons.hourglass_bottom_rounded;
         color = AppColors.orange;
         title = 'Waiting for the provider';
-        text = '$providerName will review your request. Your deposit of ${money(b.bookingFee)} secures it; you pay the remaining ${money(b.balance)} after the service is done.';
+        text = '$providerName will review your request. Your booking fee of ${money(b.bookingFee)} secures it; you pay the remaining ${money(b.balance)} after the service is done.';
       case BookingStatus.confirmed:
         if (b.pinVerified) {
           icon = Icons.handyman_outlined;
@@ -375,7 +373,7 @@ class _NextStep extends StatelessWidget {
           icon = Icons.check_circle_outline_rounded;
           color = AppColors.green;
           title = 'Booking secured';
-          text = '$providerName accepted your request and your deposit secured it. '
+          text = '$providerName accepted your request and your booking fee secured it. '
               'Give them your PIN when they arrive. You pay the remaining ${money(b.balance)} after the service.';
         }
       case BookingStatus.completed:
@@ -399,14 +397,14 @@ class _NextStep extends StatelessWidget {
         icon = Icons.info_outline_rounded;
         color = AppColors.red;
         title = 'Request declined';
-        text = '$providerName couldn’t take this booking. Your deposit of ${money(b.bookingFee)} is refunded.';
+        text = '$providerName couldn’t take this booking. Your booking fee of ${money(b.bookingFee)} is refunded.';
       case BookingStatus.cancelled:
         icon = Icons.cancel_outlined;
         color = AppColors.muted;
         title = 'Booking cancelled';
         text = b.feeRefunded
-            ? 'Your deposit of ${money(b.bookingFee)} is refunded.'
-            : 'The deposit is non-refundable once a provider has accepted.';
+            ? 'Your booking fee of ${money(b.bookingFee)} is refunded.'
+            : 'The booking fee is non-refundable once a provider has accepted.';
     }
     return Container(
       padding: const EdgeInsets.all(14),

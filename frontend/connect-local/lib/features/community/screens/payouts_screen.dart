@@ -78,7 +78,7 @@ class PayoutsScreen extends StatelessWidget {
             const Text(
               'When the customer has paid, the job price minus ConnectLocal’s '
               'commission is paid to your bank account automatically. For cash jobs you '
-              'keep the cash and ConnectLocal pays you the deposit minus its commission.',
+              'keep the cash and ConnectLocal pays you the booking fee minus its commission.',
               style: TextStyle(fontSize: 12, height: 1.4, color: AppColors.muted),
             ),
             const SizedBox(height: 22),

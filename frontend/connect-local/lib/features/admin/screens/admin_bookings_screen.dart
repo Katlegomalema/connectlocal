@@ -82,10 +82,16 @@ class _AdminBookingsScreenState extends State<AdminBookingsScreen> {
     } else {
       payoutText = '\u2013';
     }
+    final start = b.dateTime;
+    final end = start.add(Duration(minutes: b.blockedMinutes));
+    String clock(DateTime d) => clockLabel(d.hour * 60 + d.minute);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _line('Deposit',
+        _line('Type', b.atBusiness ? 'Visit the business' : 'House call'),
+        if (!b.atBusiness) _line('Address', b.address.isEmpty ? 'Not provided' : b.address),
+        _line('Time slot', '${clock(start)} \u2013 ${clock(end)}'),
+        _line('Booking fee',
             '${money(b.bookingFee)} ${b.feeRefunded ? 'refunded' : 'paid'}'),
         _line('Service cost', serviceText, color: serviceColor),
         _line(

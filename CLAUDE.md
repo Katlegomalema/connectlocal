@@ -11,13 +11,13 @@ Flutter app → Express backend API → Supabase Postgres.
   - Repositories use `supabaseAdmin` (service-role key, **bypasses RLS**). So the backend itself must
     check who may read/write what (ownership + role) in services/middleware.
   - `middleware/auth.js`: `verifyToken` checks the Supabase access token, then loads the `public.users` row (role, is_active).
-- `frontend/`: currently only a README. The Flutter app is in `connect-local-v42.zip` (newest; ignore v39).
-  It should live unzipped at `frontend/connect-local/`.
+- `frontend/connect-local/`: the Flutter app (from `connect-local-v42.zip`; ignore v39). See SETUP.md to run it.
   - Entry points: `lib/main.dart` (customer + provider app), `lib/main_admin.dart` (separate admin web app).
-  - All data today lives on the device: `lib/features/community/state/app_state.dart` + `app_state_storage.dart`
-    (shared_preferences). `FRONTEND_HANDOVER.md` lists every plug-in point; search `TODO (backend)` / `TODO (DB)`.
-  - Swappable services already exist: `auth/auth_service.dart` (`LocalAuthService`), `booking/payment_service.dart`
-    (`DemoPayFastService`), `admin/admin_auth.dart`. Build settings via `--dart-define` in `shared/app_config.dart`.
+  - All data comes from the API: `lib/core/api_client.dart` (tokens, refresh, errors) + `lib/core/connect_local_repository.dart`
+    (every endpoint) feed `lib/features/community/state/app_state.dart`. Only the sign-in tokens are kept on the device;
+    there is no offline / device-only mode (`app_state_storage.dart`, `LocalAuthService`, `DemoPayFastService`, DEV_TOOLS
+    were removed). A build without `--dart-define=API_BASE_URL=...` shows a "not connected" page.
+  - Slots/working hours: `lib/features/community/models/schedule.dart` (same rules as `backend/src/utils/schedule.js`).
 - `docs/api-specs/*.md`: intended API contracts.
 
 ## Environment
@@ -38,6 +38,15 @@ Flutter app → Express backend API → Supabase Postgres.
 - Providers: registration number (format `YYYY/NNNNNN/TT`) + documents; admin approves → `verification_status = verified`.
   Providers need bank details before accepting bookings; store account numbers encrypted, never return them in full.
 - Pricing: per hour, fixed price, or packages (`service_packages`: service_id, name, price, description).
+- Categories: exactly 10, in this order: Beauty & Health, Healthcare, Plumbing, Cleaning Services, Education & Tutoring,
+  Automotive Services, Electrical Services, Events & Photography, Home Maintenance, Other (DB migration
+  `20261105200000_connectlocal_categories.sql` = `AppState.kCategories`).
+- Booking type: "Visit the business" (`bookings.at_business = true`, needs `providers.offers_visit` + a business address)
+  or "House call" (`offers_house_call`, needs the customer's address). A provider offers at least one.
+- Time slots: provider working hours (`provider_availability`, standard Mon–Fri 8–17, Sat 9–13 until set) and slot length
+  (`providers.slot_minutes`: 30/60/120/240/480). A booking holds one slot (per-hour services: the hours booked) and keeps
+  **30 minutes free** before/after other bookings. Times are SAST. The API checks this in createBooking/reschedule;
+  `GET /providers/:id/schedule` gives the app the hours + taken times (no customer details).
 - Booking flow: customer requests and pays a **15% booking fee by card** (it is a deposit that counts toward the price) →
   provider accepts → 4-digit **PIN** shown to the customer → provider enters the PIN **on arrival** (job starts,
   `in_progress`) → provider completes → customer pays the **balance** (price − fee) by card or cash →
@@ -46,7 +55,13 @@ Flutter app → Express backend API → Supabase Postgres.
 - Payments via **PayFast** (sandbox while testing). Backend builds + signs the form, receives the ITN on `notify_url`,
   validates it, and records every transaction (`payments`, `receipts`).
 
-## Known problems found in the code (Nov 2026)
+## Team and branches (Nov 2026)
+- We work on `fix/round-2` (and `delevop`); `origin/main` is still only the first scaffold commit.
+- Teammates push frontend work as branches built on older code: Shuan (`frontend-booking-updates`, Flutter screens),
+  radzivhonikharendwe (`delevop`). Merge them into our branch and keep the server-only app state (no device storage).
+- `origin/frontend` and `origin/separate-admin` are unrelated-history copies of the v39/v42 zips: do not merge them.
+
+## Known problems found in the code (Nov 2026; items 1-8 are fixed, kept for history)
 1. `src/config/database.js` defaults to the IPv6-only direct host and has `connectionTimeoutMillis: 2000`.
    Nothing imports this pool today; either delete it or make it read `DATABASE_URL` (Session pooler) only, with a longer timeout.
 2. `src/config/supabase.js` silently falls back to the anon key when `SUPABASE_SERVICE_ROLE_KEY` is missing. Then every

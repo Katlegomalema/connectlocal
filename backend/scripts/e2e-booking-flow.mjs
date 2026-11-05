@@ -59,7 +59,12 @@ async function makeUser(role, { phone, tag } = {}) {
   return { id: data.user.id, token: login.data.accessToken };
 }
 
-const inTwoDays = (hours) => new Date(Date.now() + 2 * 86400000 + hours * 3600000).toISOString();
+/** In two days at 06:00 UTC (08:00 South African time) plus [hours]: always inside the test working hours. */
+const inTwoDays = (hours) => {
+  const d = new Date(Date.now() + 2 * 86400000);
+  d.setUTCHours(6, 0, 0, 0);
+  return new Date(d.getTime() + hours * 3600000).toISOString();
+};
 
 try {
   const customer = await makeUser('customer', { phone: `+2782${String(stamp).slice(-7)}` });
@@ -69,7 +74,7 @@ try {
     .select('new_status, changed_by').eq('booking_id', id).order('changed_at')).data || [])
     .map((h) => `${h.new_status}:${who(h.changed_by)}`).join(' > ');
 
-  const { data: cat } = await db.from('service_categories').select('id').eq('name', 'Cleaning').single();
+  const { data: cat } = await db.from('service_categories').select('id').eq('name', 'Cleaning Services').single();
   const { data: prov } = await db.from('providers').insert({
     user_id: providerUser.id,
     business_name: `E2E Booking Co ${stamp}`,
@@ -77,6 +82,9 @@ try {
     submitted_at: new Date().toISOString()
   }).select('id').single();
   providerId = prov.id;
+  // Working hours for the test: every day 06:00-20:00 (SAST). 0 = Sunday in the database.
+  await db.from('provider_availability').insert([0, 1, 2, 3, 4, 5, 6]
+    .map((day) => ({ provider_id: providerId, day_of_week: day, start_time: '06:00', end_time: '20:00' })));
   const { data: fixed } = await db.from('services').insert({
     provider_id: providerId, category_id: cat.id, service_name: 'Window wash', base_price: 450, duration_minutes: 60, pricing_type: 'fixed'
   }).select('id').single();
@@ -94,6 +102,54 @@ try {
   const b1 = r.data;
   const id1 = b1?.id;
   bookingIds.push(id1);
+
+  // ---- booking options, working hours, slots ---------------------------------------------------------
+  r = await call('GET', `/providers/${providerId}/schedule`);
+  check('public schedule: house calls only by default, 1-hour slots, 30-min gap, the new booking is busy',
+    r.status === 200 && r.data?.offersHouseCall === true && r.data?.offersVisit === false && r.data?.slotMinutes === 60
+    && r.data?.gapMinutes === 30 && r.data?.busy?.some((b) => new Date(b.start).getTime() === new Date(inTwoDays(0)).getTime())
+    && !r.text.includes(customer.id), r.json?.message);
+  r = await call('POST', '/bookings', {
+    token: customer.token,
+    body: { providerId, serviceId: fixed.id, scheduledStart: inTwoDays(1.25), address: '12 Main Rd, Pretoria' }
+  });
+  check('a slot inside the 30-minute gap after a booking is refused -> 409', r.status === 409, r.json?.message);
+  r = await call('POST', '/bookings', {
+    token: customer.token,
+    body: { providerId, serviceId: fixed.id, scheduledStart: inTwoDays(11.5), address: '12 Main Rd, Pretoria' }
+  });
+  check('a time after closing (19:30 + 1 h > 20:00) is refused -> 409', r.status === 409
+    && /working hours/.test(r.json?.message || ''), r.json?.message);
+  r = await call('POST', '/bookings', {
+    token: customer.token, body: { providerId, serviceId: fixed.id, scheduledStart: inTwoDays(2), atBusiness: true }
+  });
+  check('"visit the business" refused while the provider only does house calls', r.status === 400, r.json?.message);
+  r = await call('PUT', '/providers/me/schedule', { token: providerUser.token, body: { offersVisit: true } });
+  check('a visit needs a business address first', r.status === 400 && /address/.test(r.json?.message || ''), r.json?.message);
+  await call('PATCH', '/providers/me', { token: providerUser.token, body: { streetAddress: '5 Salon St, Hatfield' } });
+  r = await call('PUT', '/providers/me/schedule', {
+    token: providerUser.token,
+    body: {
+      offersVisit: true, offersHouseCall: true, slotMinutes: 60, workingHours: [1, 2, 3, 4, 5, 6, 7].map((day) => ({ day, open: 360, close: 1200 }))
+    }
+  });
+  check('provider saves booking options and working hours', r.status === 200 && r.data?.schedule?.offersVisit === true
+    && r.data?.schedule?.customHours === true && r.data?.schedule?.workingHours?.length === 7, r.json?.message);
+  r = await call('PUT', '/providers/me/schedule', { token: providerUser.token, body: { offersVisit: false, offersHouseCall: false } });
+  check('at least one booking option must stay on', r.status === 400, r.json?.message);
+  r = await call('POST', '/bookings', {
+    token: customer.token, body: { providerId, serviceId: fixed.id, scheduledStart: inTwoDays(2), atBusiness: true }
+  });
+  bookingIds.push(r.data?.id);
+  check('"visit the business" booking: stored as at_business with the business address, no customer map point',
+    r.status === 201 && r.data?.at_business === true && r.data?.service_address === '5 Salon St, Hatfield'
+    && r.data?.service_location === null, `${r.status} ${r.json?.message || ''}`);
+  if (r.data?.id) {
+    const cancelVisit = await call('POST', `/bookings/${r.data.id}/cancel`, { token: customer.token });
+    check('cancelled request frees its slot', cancelVisit.status === 200
+      && !(await call('GET', `/providers/${providerId}/schedule`)).data?.busy
+        ?.some((b) => new Date(b.start).getTime() === new Date(inTwoDays(2)).getTime()));
+  }
   check('book fixed R450 -> fee 67.50, balance 382.50, pending', r.status === 201 && Number(b1.booking_fee_amount) === 67.5
     && Number(b1.balance_amount) === 382.5 && b1.status === 'pending', `${r.status} ${r.json?.message || ''}`);
   check('job address and map point stored', b1?.service_address === '12 Main Rd, Pretoria'
@@ -305,7 +361,7 @@ try {
   await db.from('providers').update({ business_registration_number: regNumber }).eq('id', providerId);
   const second = await makeUser('provider', { tag: 'provider2' });
   r = await call('POST', '/providers', {
-    token: second.token, body: { businessName: 'Copy Cat Co', registrationNumber: regNumber, category: 'Cleaning' }
+    token: second.token, body: { businessName: 'Copy Cat Co', registrationNumber: regNumber, category: 'Cleaning Services' }
   });
   check('a registration number already used by another business -> 409', r.status === 409, `${r.status} ${r.json?.message}`);
 

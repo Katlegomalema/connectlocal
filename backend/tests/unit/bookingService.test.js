@@ -8,6 +8,7 @@ const repository = {
   getPackageById: jest.fn(),
   getCustomerById: jest.fn(),
   hasBookingConflict: jest.fn(),
+  getProviderAvailability: jest.fn(),
   createBooking: jest.fn(),
   getBookingById: jest.fn(),
   getProviderByUserId: jest.fn(),
@@ -29,7 +30,14 @@ const { deriveArrivalPin, hashArrivalPin } = await import('../../src/utils/secur
 
 const customer = { id: 'customer-1', role: 'customer' };
 const providerUser = { id: 'provider-user-1', role: 'provider' };
-const inOneDay = () => new Date(Date.now() + 86400000).toISOString();
+/** Tomorrow 10:00 South African time (08:00 UTC): inside the working hours the tests set. */
+const inOneDay = () => {
+  const d = new Date(Date.now() + 86400000);
+  d.setUTCHours(8, 0, 0, 0);
+  return d.toISOString();
+};
+/** Open every day 06:00-20:00 (provider_availability rows, 0 = Sunday). */
+const allWeek = [0, 1, 2, 3, 4, 5, 6].map((day) => ({ day_of_week: day, start_time: '06:00:00', end_time: '20:00:00' }));
 const verifiedProvider = {
   id: 'provider-1', user_id: 'provider-user-1', verification_status: 'verified', is_active: true
 };
@@ -51,6 +59,7 @@ describe('Booking service', () => {
     repository.getProviderById.mockResolvedValue(verifiedProvider);
     repository.getProviderByUserId.mockResolvedValue(verifiedProvider);
     repository.hasBookingConflict.mockResolvedValue(false);
+    repository.getProviderAvailability.mockResolvedValue(allWeek);
     repository.createBooking.mockImplementation(async (booking) => ({ id: 'booking-1', ...booking }));
     repository.updateBooking.mockImplementation(async (id, statuses, updates) => ({ id, ...updates }));
     payoutService.hasPayoutDetails.mockResolvedValue(true);
@@ -60,7 +69,7 @@ describe('Booking service', () => {
   test('fixed price: total = base price, fee = 15%, balance left to the database', async () => {
     givenService();
     const booking = await bookingService.createBooking(customer, {
-      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), notes: 'Please call first'
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), notes: 'Please call first'
     });
 
     expect(booking).toMatchObject({
@@ -79,7 +88,7 @@ describe('Booking service', () => {
   test('hourly price: hours x rate, and the slot lasts that many hours', async () => {
     givenService({ pricing_type: 'hourly', base_price: '200.00' });
     const booking = await bookingService.createBooking(customer, {
-      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), hours: 3
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), hours: 3
     });
     expect(booking).toMatchObject({ total_amount: 600, quantity: 3, booking_fee_amount: 90 });
     expect(new Date(booking.scheduled_end) - new Date(booking.scheduled_start)).toBe(3 * 3600000);
@@ -91,7 +100,7 @@ describe('Booking service', () => {
       id: 'pkg-1', service_id: 'service-1', name: 'Full house', price: '1200.00', duration_minutes: 180, is_active: true
     });
     const booking = await bookingService.createBooking(customer, {
-      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), packageId: 'pkg-1'
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), packageId: 'pkg-1'
     });
     expect(booking).toMatchObject({
       total_amount: 1200, booking_fee_amount: 180, package_id: 'pkg-1', package_name_at_booking: 'Full house'
@@ -104,7 +113,7 @@ describe('Booking service', () => {
       id: 'pkg-9', service_id: 'other-service', name: 'X', price: 1, is_active: true
     });
     await expect(bookingService.createBooking(customer, {
-      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), packageId: 'pkg-9'
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay(), packageId: 'pkg-9'
     })).rejects.toThrow('Package not found');
   });
 
@@ -112,7 +121,7 @@ describe('Booking service', () => {
     repository.getCustomerById.mockResolvedValue({ id: 'customer-1', email_verified: true, phone_verified: false });
     givenService();
     await expect(bookingService.createBooking(customer, {
-      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
     })).rejects.toThrow('Verify your email address and phone number');
     expect(repository.createBooking).not.toHaveBeenCalled();
   });
@@ -121,9 +130,77 @@ describe('Booking service', () => {
     givenService();
     repository.hasBookingConflict.mockResolvedValue(true);
     await expect(bookingService.createBooking(customer, {
-      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
-    })).rejects.toThrow('time slot is unavailable');
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    })).rejects.toThrow('no longer available');
     expect(repository.createBooking).not.toHaveBeenCalled();
+  });
+
+  test('the slot check keeps 30 minutes free before and after the booking', async () => {
+    givenService();
+    await bookingService.createBooking(customer, {
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    });
+    const [, from, to] = repository.hasBookingConflict.mock.calls[0];
+    const start = new Date(inOneDay()).getTime();
+    expect(new Date(from).getTime()).toBe(start - 30 * 60000);
+    expect(new Date(to).getTime()).toBe(start + 60 * 60000 + 30 * 60000); // 1-hour slot + gap
+  });
+
+  test('a time outside the working hours is refused', async () => {
+    givenService();
+    // Open 09:00-10:00 every day: a 10:00-11:00 booking (SAST) never fits.
+    repository.getProviderAvailability.mockResolvedValue([0, 1, 2, 3, 4, 5, 6]
+      .map((day) => ({ day_of_week: day, start_time: '09:00:00', end_time: '10:00:00' })));
+    await expect(bookingService.createBooking(customer, {
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    })).rejects.toThrow('outside the provider');
+    expect(repository.createBooking).not.toHaveBeenCalled();
+  });
+
+  test('without saved hours the standard hours apply (Mon-Fri 8-17, Sat 9-13, Sunday closed)', async () => {
+    givenService();
+    repository.getProviderAvailability.mockResolvedValue([]);
+    const tomorrow = new Date(inOneDay()); // 10:00 SAST
+    const attempt = bookingService.createBooking(customer, {
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    });
+    if (tomorrow.getUTCDay() === 0) await expect(attempt).rejects.toThrow('outside the provider');
+    else await expect(attempt).resolves.toBeTruthy();
+  });
+
+  test('visit the business: only when the provider offers it; stored with the business address', async () => {
+    givenService();
+    await expect(bookingService.createBooking(customer, {
+      atBusiness: true, providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    })).rejects.toThrow('does not take visits');
+    repository.getProviderById.mockResolvedValue({
+      ...verifiedProvider, offers_visit: true, street_address: '5 Salon St', city: 'Pretoria'
+    });
+    const booking = await bookingService.createBooking(customer, {
+      atBusiness: true, providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    });
+    expect(booking).toMatchObject({ at_business: true, service_address: '5 Salon St, Pretoria', service_location: null });
+  });
+
+  test('house call: refused when the provider does not do them; needs an address', async () => {
+    givenService();
+    repository.getProviderById.mockResolvedValue({ ...verifiedProvider, offers_house_call: false, offers_visit: true });
+    await expect(bookingService.createBooking(customer, {
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    })).rejects.toThrow('does not do house calls');
+    repository.getProviderById.mockResolvedValue(verifiedProvider);
+    await expect(bookingService.createBooking(customer, {
+      providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    })).rejects.toThrow('Enter the address');
+  });
+
+  test('a fixed-price booking holds one slot of the provider\'s slot length', async () => {
+    givenService();
+    repository.getProviderById.mockResolvedValue({ ...verifiedProvider, slot_minutes: 120 });
+    const booking = await bookingService.createBooking(customer, {
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    });
+    expect(new Date(booking.scheduled_end) - new Date(booking.scheduled_start)).toBe(2 * 3600000);
   });
 
   test('rejects provider booking creation', async () => {

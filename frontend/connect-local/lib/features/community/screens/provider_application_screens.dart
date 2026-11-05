@@ -51,7 +51,7 @@ class ProviderApplication {
 // Screen 23: Become a Provider
 // ---------------------------------------------------------------------------
 class BecomeProviderScreen extends StatefulWidget {
-  /// Categories shown in the picker. Replace with the real list from your backend.
+  /// Categories shown in the picker (the app passes [AppState.categories]).
   final List<String> categories;
 
   /// Called with the form data when the user taps Submit Application. Returns an error message to show
@@ -64,15 +64,7 @@ class BecomeProviderScreen extends StatefulWidget {
 
   const BecomeProviderScreen({
     super.key,
-    this.categories = const [
-      'Plumbing',
-      'Cleaning',
-      'Tutoring',
-      'Electrical',
-      'Gardening',
-      'Landscaping',
-      'Other',
-    ],
+    this.categories = AppState.kCategories,
     this.onSubmit,
     this.onDone,
   });

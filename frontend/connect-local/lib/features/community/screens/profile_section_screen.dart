@@ -144,7 +144,7 @@ class _ProfileSectionScreenState extends State<ProfileSectionScreen> {
                             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
                         SizedBox(height: 2),
                         Text(
-                          'Deposits are always paid online. You enter your payment details on PayFast’s secure page; ConnectLocal never stores them.',
+                          'Booking fees are always paid online. You enter your payment details on PayFast’s secure page; ConnectLocal never stores them.',
                           style: TextStyle(fontSize: 13, height: 1.4, color: AppColors.muted),
                         ),
                       ],
@@ -228,7 +228,7 @@ class _ProfileSectionScreenState extends State<ProfileSectionScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '${p.kind == PaymentKind.bookingFee ? 'Deposit' : 'Service'}'
+                          '${p.kind == PaymentKind.bookingFee ? 'Booking fee' : 'Service'}'
                           '${booking == null ? '' : ' · ${booking.serviceName}'}',
                           style: const TextStyle(
                               fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.text),

@@ -62,7 +62,7 @@ describe('booking notifications', () => {
     expect(notificationService.sendInAppNotification).toHaveBeenCalledTimes(1);
     const [userId, note] = notificationService.sendInAppNotification.mock.calls[0];
     expect(userId).toBe('provider-user');
-    expect(note).toMatchObject({ type: 'booking', title: 'New booking request', relatedEntityId: 'booking-1' });
+    expect(note).toMatchObject({ type: 'booking', title: 'New house call request', relatedEntityId: 'booking-1' });
     expect(note.body).toContain('Pat booked Window wash');
     expect(note.body).not.toContain('Doe');
   });

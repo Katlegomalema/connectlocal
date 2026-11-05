@@ -10,6 +10,7 @@ import { verifyToken, requireRole, optionalToken } from '../middleware/auth.js';
 import { validateBody, validateUuidParam } from '../middleware/validation.js';
 import * as providerService from '../services/providerService.js';
 import * as payoutService from '../services/payoutService.js';
+import * as scheduleService from '../services/scheduleService.js';
 import * as searchService from '../services/searchService.js';
 
 const router = express.Router();
@@ -258,6 +259,27 @@ router.get('/me/payouts', verifyToken, requireRole('provider'), asyncHandler(asy
   res.status(200).json({ success: true, data: { payouts: await payoutService.listMyPayouts(req.user) } });
 }));
 
+const scheduleSchema = z.object({
+  offersVisit: z.boolean().optional(),
+  offersHouseCall: z.boolean().optional(),
+  slotMinutes: z.number().int().optional(),
+  workingHours: z.array(z.object({
+    day: z.number().int().min(1).max(7),
+    open: z.number().int().min(0).max(1440),
+    close: z.number().int().min(0).max(1440)
+  }).strict()).max(7).optional()
+}).strict();
+
+/** GET/PUT /providers/me/schedule: visit / house call, slot length and working hours. */
+router.get('/me/schedule', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {
+  res.status(200).json({ success: true, data: { schedule: await scheduleService.getOwnSchedule(req.user) } });
+}));
+
+router.put('/me/schedule', verifyToken, requireRole('provider'), validateBody(scheduleSchema), asyncHandler(async (req, res) => {
+  const schedule = await scheduleService.saveOwnSchedule(req.user, req.validatedBody);
+  res.status(200).json({ success: true, message: 'Booking options saved', data: { schedule } });
+}));
+
 router.get('/me/availability', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {
   const provider = await providerService.getOwnProvider(req.user);
   const availability = await providerService.getAvailability(provider.id);
@@ -274,6 +296,12 @@ router.put('/me/availability', verifyToken, requireRole('provider'), asyncHandle
  * GET /api/v1/providers/:id
  * Fetch provider profile
  */
+/** GET /providers/:id/schedule (public): booking options, working hours and the times already taken. */
+router.get('/:id/schedule', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: await scheduleService.getPublicSchedule(req.params.id) });
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const provider = await providerService.getPublicProvider(req.params.id);
   res.status(200).json({

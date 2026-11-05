@@ -42,7 +42,7 @@ class AdminEarningsScreen extends StatelessWidget {
               Expanded(
                   child: StatCard(
                       icon: Icons.lock_clock_outlined,
-                      label: 'Deposits held',
+                      label: 'Booking fees held',
                       value: money(deposits))),
             ]),
             const SizedBox(height: 12),

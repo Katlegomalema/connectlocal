@@ -9,6 +9,7 @@ import * as payoutService from './payoutService.js';
 import { notifyBookingEvent } from './bookingNotifier.js';
 import logger from '../utils/logger.js';
 import { toLatLng } from '../utils/geo.js';
+import { BOOKING_GAP_MINUTES, fitsWorkingHours, hoursFromRows } from '../utils/schedule.js';
 import {
   ARRIVAL_PIN_MAX_ATTEMPTS, BOOKING_FEE_RATE, MAX_BOOKING_QUANTITY, bookingFeeFor, roundMoney
 } from '../config/business.js';
@@ -162,21 +163,34 @@ export const createBooking = async (actor, bookingData) => {
     throw new ConflictError('Provider is not approved to receive bookings');
   }
 
+  // Visit the business or house call: only what the provider offers.
+  const atBusiness = bookingData.atBusiness === true;
+  if (atBusiness && !provider.offers_visit) throw new ValidationError('This provider does not take visits at the business');
+  if (!atBusiness && provider.offers_house_call === false) throw new ValidationError('This provider does not do house calls');
+  if (!atBusiness && !bookingData.address?.trim()) throw new ValidationError('Enter the address where the provider should come');
+
   const price = await priceBooking(service, bookingData);
   const totalPrice = roundMoney(price.unitPrice * price.quantity);
-  if (!Number.isFinite(price.durationMinutes) || price.durationMinutes <= 0
-      || !Number.isFinite(totalPrice) || totalPrice <= 0) {
+  // How long the booking holds the provider's time: the hours booked (per-hour services), else one slot.
+  const blockedMinutes = price.pricingType === 'hourly' ? price.durationMinutes : (provider.slot_minutes || 60);
+  if (!Number.isFinite(blockedMinutes) || blockedMinutes <= 0 || !Number.isFinite(totalPrice) || totalPrice <= 0) {
     throw new ValidationError('Service has invalid duration or price');
   }
 
   const scheduledStart = parseStartTime(bookingData.scheduledStart);
-  const scheduledEnd = new Date(scheduledStart.getTime() + price.durationMinutes * 60000);
+  const scheduledEnd = new Date(scheduledStart.getTime() + blockedMinutes * 60000);
+  const workingHours = hoursFromRows(await bookingRepository.getProviderAvailability(provider.id));
+  if (!fitsWorkingHours(workingHours, scheduledStart, blockedMinutes)) {
+    throw new ConflictError('That time is outside the provider\'s working hours. Please choose another slot.');
+  }
+  // 30 minutes stay free after every booking (before and after this one).
+  const gapMs = BOOKING_GAP_MINUTES * 60000;
   const hasConflict = await bookingRepository.hasBookingConflict(
     service.provider_id,
-    scheduledStart.toISOString(),
-    scheduledEnd.toISOString()
+    new Date(scheduledStart.getTime() - gapMs).toISOString(),
+    new Date(scheduledEnd.getTime() + gapMs).toISOString()
   );
-  if (hasConflict) throw new ConflictError('The provider time slot is unavailable');
+  if (hasConflict) throw new ConflictError('That time slot is no longer available. Please choose another.');
 
   const booking = await bookingRepository.createBooking({
     customer_id: actor.id,
@@ -186,7 +200,8 @@ export const createBooking = async (actor, bookingData) => {
     scheduled_end: scheduledEnd.toISOString(),
     status: 'pending',
     service_price_at_booking: roundMoney(price.unitPrice),
-    duration_minutes_at_booking: price.durationMinutes,
+    duration_minutes_at_booking: blockedMinutes,
+    at_business: atBusiness,
     pricing_type_at_booking: price.pricingType,
     package_id: price.packageId || null,
     package_name_at_booking: price.packageName || null,
@@ -196,8 +211,11 @@ export const createBooking = async (actor, bookingData) => {
     booking_fee_amount: bookingFeeFor(totalPrice),
     booking_fee_status: 'pending',
     status_changed_by: actor.id, // -> booking_status_history (trigger)
-    service_address: bookingData.address?.trim() || null,
-    service_location: Number.isFinite(bookingData.latitude) && Number.isFinite(bookingData.longitude)
+    // A business visit happens at the business address; a house call at the customer's.
+    service_address: atBusiness
+      ? [provider.street_address, provider.suburb, provider.city].filter((p) => p?.trim()).join(', ') || null
+      : bookingData.address.trim(),
+    service_location: !atBusiness && Number.isFinite(bookingData.latitude) && Number.isFinite(bookingData.longitude)
       ? `SRID=4326;POINT(${bookingData.longitude} ${bookingData.latitude})`
       : null,
     notes: bookingData.notes || null
@@ -298,13 +316,18 @@ export const rescheduleBooking = async (actor, bookingId, scheduledStartValue) =
     throw new ValidationError('Booking has an invalid scheduled duration');
   }
   const scheduledEnd = new Date(scheduledStart.getTime() + durationMs);
+  const workingHours = hoursFromRows(await bookingRepository.getProviderAvailability(booking.provider_id));
+  if (!fitsWorkingHours(workingHours, scheduledStart, durationMs / 60000)) {
+    throw new ConflictError('That time is outside the provider\'s working hours. Please choose another slot.');
+  }
+  const gapMs = BOOKING_GAP_MINUTES * 60000;
   const hasConflict = await bookingRepository.hasBookingConflict(
     booking.provider_id,
-    scheduledStart.toISOString(),
-    scheduledEnd.toISOString(),
+    new Date(scheduledStart.getTime() - gapMs).toISOString(),
+    new Date(scheduledEnd.getTime() + gapMs).toISOString(),
     bookingId
   );
-  if (hasConflict) throw new ConflictError('The provider time slot is unavailable');
+  if (hasConflict) throw new ConflictError('That time slot is no longer available. Please choose another.');
 
   // Back to pending: the provider must accept the new time (the paid fee stays paid; a new PIN hash is set
   // on acceptance).

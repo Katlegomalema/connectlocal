@@ -33,9 +33,9 @@ const EVENTS = {
   requested: (b) => [{
     to: 'provider',
     type: 'booking',
-    title: 'New booking request',
-    body: `${firstName(b.customer?.full_name)} booked ${b.service} for ${when(b.scheduled_start)}. `
-      + 'Accept or decline it in Bookings.'
+    title: b.at_business ? 'New booking request' : 'New house call request',
+    body: `${firstName(b.customer?.full_name)} booked ${b.service} for ${when(b.scheduled_start)}`
+      + `${b.at_business ? ' (they will visit your business)' : ' (a house call)'}. Accept or decline it in Bookings.`
   }],
   accepted: (b) => [{
     to: 'customer',

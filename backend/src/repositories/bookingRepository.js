@@ -44,7 +44,8 @@ export const getServiceById = async (serviceId) => {
 export const getProviderById = async (providerId) => {
   const { data, error } = await supabase
     .from('providers')
-    .select('id, user_id, verification_status, is_active')
+    .select('id, user_id, verification_status, is_active, offers_visit, offers_house_call, slot_minutes, '
+      + 'street_address, suburb, city, location')
     .eq('id', providerId)
     .maybeSingle();
 
@@ -113,6 +114,33 @@ export const hasBookingConflict = async (providerId, scheduledStart, scheduledEn
   return Boolean(data?.length);
 };
 
+/** The provider's working hours (provider_availability rows, day_of_week 0 = Sunday). */
+export const getProviderAvailability = async (providerId) => {
+  const { data, error } = await supabase
+    .from('provider_availability')
+    .select('day_of_week, start_time, end_time')
+    .eq('provider_id', providerId);
+  if (error) throw error;
+  return data || [];
+};
+
+/** Times held by this provider's bookings between [fromIso] and [toIso] (same rule as hasBookingConflict). */
+export const listBusyTimes = async (providerId, fromIso, toIso) => {
+  const holdSince = new Date(Date.now() - UNPAID_HOLD_MINUTES * 60000).toISOString();
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('scheduled_start, scheduled_end')
+    .eq('provider_id', providerId)
+    .in('status', ['pending', 'accepted', 'in_progress'])
+    .or(`status.neq.pending,booking_fee_status.eq.paid,created_at.gt.${holdSince}`)
+    .lt('scheduled_start', toIso)
+    .gt('scheduled_end', fromIso)
+    .order('scheduled_start')
+    .limit(500);
+  if (error) throw error;
+  return data || [];
+};
+
 export const createBooking = async (bookingData) => {
   const { data, error } = await supabase
     .from('bookings')
@@ -165,6 +193,8 @@ export const listBookings = async ({
 };
 
 export default {
+  listBusyTimes,
+  getProviderAvailability,
   getBookingById,
   getServiceById,
   getProviderById,

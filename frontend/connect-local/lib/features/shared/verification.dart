@@ -90,6 +90,9 @@ String? checkRegistrationNumber(String value) {
   return null;
 }
 
+// Phone verification codes are created and checked by the backend (POST /auth/phone/request-otp and
+// /auth/phone/verify-otp); see features/auth/api_auth_service.dart.
+
 // ---------------------------------------------------------------------------
 // Bank details for payouts (free, offline checks).
 // ---------------------------------------------------------------------------

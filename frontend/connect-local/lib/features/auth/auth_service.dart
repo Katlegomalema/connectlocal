@@ -26,7 +26,7 @@ class AuthResult {
   /// in the sign-up email, or signed in with Google). TODO (backend): real value.
   final bool emailVerified;
 
-  /// Set when the account IS one of the existing providers (demo accounts).
+  /// The provider (business) id of this account, when it has one.
   final String? providerId;
 
   /// 'customer' or 'provider' (chosen at sign-up). A provider whose application is not approved yet has
