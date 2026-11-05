@@ -20,7 +20,10 @@ const paymentService = {
 };
 
 jest.unstable_mockModule('../../src/repositories/bookingRepository.js', () => repository);
+const payoutService = { hasPayoutDetails: jest.fn() };
 jest.unstable_mockModule('../../src/services/paymentService.js', () => paymentService);
+jest.unstable_mockModule('../../src/services/payoutService.js', () => payoutService);
+jest.unstable_mockModule('../../src/services/bookingNotifier.js', () => ({ notifyBookingEvent: jest.fn(async () => {}) }));
 const bookingService = await import('../../src/services/bookingService.js');
 const { deriveArrivalPin, hashArrivalPin } = await import('../../src/utils/secureCodes.js');
 
@@ -50,6 +53,7 @@ describe('Booking service', () => {
     repository.hasBookingConflict.mockResolvedValue(false);
     repository.createBooking.mockImplementation(async (booking) => ({ id: 'booking-1', ...booking }));
     repository.updateBooking.mockImplementation(async (id, statuses, updates) => ({ id, ...updates }));
+    payoutService.hasPayoutDetails.mockResolvedValue(true);
   });
 
   // ---------------- create ----------------
@@ -132,6 +136,22 @@ describe('Booking service', () => {
   test('provider cannot accept before the booking fee is paid', async () => {
     repository.getBookingById.mockResolvedValue({ id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'pending' });
     await expect(bookingService.acceptBooking(providerUser, 'booking-1')).rejects.toThrow('not paid the booking fee');
+  });
+
+  test('provider cannot accept without bank details (payout needs somewhere to go)', async () => {
+    repository.getBookingById.mockResolvedValue({ id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid' });
+    payoutService.hasPayoutDetails.mockResolvedValue(false);
+    await expect(bookingService.acceptBooking(providerUser, 'booking-1')).rejects.toThrow('bank details');
+    expect(repository.updateBooking).not.toHaveBeenCalled();
+  });
+
+  test('customer can choose cash for the balance only after completion (saved on the server)', async () => {
+    repository.getBookingById.mockResolvedValue({ id: 'booking-1', customer_id: 'customer-1', status: 'accepted', balance_status: 'pending' });
+    await expect(bookingService.chooseCashBalance(customer, 'booking-1')).rejects.toThrow('after the job is completed');
+    repository.getBookingById.mockResolvedValue({ id: 'booking-1', customer_id: 'customer-1', status: 'completed', balance_status: 'pending' });
+    const booking = await bookingService.chooseCashBalance(customer, 'booking-1');
+    expect(repository.updateBooking).toHaveBeenCalledWith('booking-1', ['completed'], { balance_payment_method: 'cash' }, { balance_status: 'pending' });
+    expect(booking.balance_payment_method).toBe('cash');
   });
 
   test('accepting stores only the PIN hash and never returns it', async () => {
@@ -237,5 +257,18 @@ describe('Booking service', () => {
     repository.listBookings.mockResolvedValue({ bookings: [{ id: 'b', arrival_pin_hash: 'secret-hash' }], total: 1 });
     const list = await bookingService.listBookings(customer, {});
     expect(list.bookings[0]).not.toHaveProperty('arrival_pin_hash');
+  });
+
+  test('the provider sees the customer phone number only once the booking is accepted', () => {
+    const row = {
+      id: 'b1', customer_id: 'customer-1', status: 'pending', customer: { full_name: 'Pat', phone_number: '+27821234567' },
+      service_location: '0101000020E61000009B3AF4CA5A313C40046C4BE11DBF39C0', arrival_pin_hash: 'x'
+    };
+    expect(bookingService.publicBooking(row, providerUser).customer.phone_number).toBeNull();
+    expect(bookingService.publicBooking({ ...row, status: 'accepted' }, providerUser).customer.phone_number).toBe('+27821234567');
+    expect(bookingService.publicBooking(row, customer).customer.phone_number).toBe('+27821234567'); // their own
+    const shown = bookingService.publicBooking(row, customer);
+    expect(shown.service_location.latitude).toBeCloseTo(-25.7465, 3); // map point as plain numbers
+    expect(shown).not.toHaveProperty('arrival_pin_hash');
   });
 });

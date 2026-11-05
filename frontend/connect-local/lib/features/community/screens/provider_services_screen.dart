@@ -61,7 +61,7 @@ class ProviderServicesScreen extends StatelessWidget {
             : ListView.separated(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
                 itemCount: services.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 14),
+                separatorBuilder: (_, _) => const SizedBox(height: 14),
                 itemBuilder: (_, i) => _ServiceTile(
                   service: services[i],
                   bookings: app.bookingsThisMonth(services[i]),

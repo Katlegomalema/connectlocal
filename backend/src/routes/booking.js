@@ -18,8 +18,14 @@ const createBookingSchema = z.object({
   packageId: z.string().uuid().optional(), // for package-priced services
   hours: z.number().int().min(1).max(24)
     .optional(), // for hourly services
+  address: z.string().trim().min(5).max(300), // where the job happens
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
   notes: z.string().max(2000).optional()
-}).strict();
+}).strict().refine((body) => (body.latitude === undefined) === (body.longitude === undefined), {
+  message: 'Send both latitude and longitude, or neither',
+  path: ['latitude']
+});
 const startSchema = z.object({ pin: z.string().regex(/^\d{4}$/, 'pin must be 4 digits') }).strict();
 
 router.param('id', validateUuidParam);
@@ -156,6 +162,15 @@ router.get('/:id/arrival-pin', verifyToken, asyncHandler(async (req, res) => {
 router.post('/:id/start', verifyToken, validateBody(startSchema), asyncHandler(async (req, res) => {
   const booking = await bookingService.startBooking(req.user, req.params.id, req.validatedBody.pin);
   res.status(200).json({ success: true, message: 'Booking started', data: booking });
+}));
+
+/**
+ * POST /api/v1/bookings/:id/balance/cash-choice
+ * Customer chooses to pay the balance in cash (the provider confirms it later).
+ */
+router.post('/:id/balance/cash-choice', verifyToken, asyncHandler(async (req, res) => {
+  const booking = await bookingService.chooseCashBalance(req.user, req.params.id);
+  res.status(200).json({ success: true, message: 'Cash payment chosen', data: booking });
 }));
 
 /**

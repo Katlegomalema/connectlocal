@@ -7,34 +7,24 @@ import '../../community/utils/format.dart';
 import '../../community/widgets/stat_card.dart';
 import '../../community/widgets/ui_kit.dart';
 
-/// What ConnectLocal earns. ConnectLocal keeps a percentage (commission) of
-/// every job; the provider gets the rest automatically. The admin sets the
-/// percentage here. TODO (backend): store the rate in a settings table.
-class AdminEarningsScreen extends StatefulWidget {
+/// What ConnectLocal earns. ConnectLocal keeps a fixed commission (10%, set by the business rules and
+/// applied by the server) of every job; the provider gets the rest automatically.
+class AdminEarningsScreen extends StatelessWidget {
   const AdminEarningsScreen({super.key});
-
-  @override
-  State<AdminEarningsScreen> createState() => _AdminEarningsScreenState();
-}
-
-class _AdminEarningsScreenState extends State<AdminEarningsScreen> {
-  double? _rate; // percent being edited (0-30)
 
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    final current = (app.commissionRate * 100).roundToDouble();
-    final rate = _rate ?? current;
-    final changed = rate != current;
+    final rate = (app.commissionRate * 100).roundToDouble();
 
     final payouts = List<Payout>.from(app.payouts)
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final jobsValue = payouts.fold<int>(0, (t, p) => t + p.jobTotal);
-    final toProviders = payouts.fold<int>(0, (t, p) => t + p.amount);
+    final jobsValue = payouts.fold<double>(0, (t, p) => t + p.jobTotal);
+    final toProviders = payouts.fold<double>(0, (t, p) => t + p.amount);
     // Deposits for jobs that are still going on (held by ConnectLocal).
     final deposits = app.allBookings
         .where((b) => b.isActive && !b.feeRefunded)
-        .fold<int>(0, (t, b) => t + b.bookingFee);
+        .fold<double>(0, (t, b) => t + b.bookingFee);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Earnings')),
@@ -72,12 +62,11 @@ class _AdminEarningsScreenState extends State<AdminEarningsScreen> {
             const SizedBox(height: 24),
             const SectionTitle('Commission rate'),
             const SizedBox(height: 8),
-            const Text(
-              'ConnectLocal keeps this percentage of each completed job. The provider '
-              'receives the rest in their bank account automatically. The 15% deposit '
-              'the customer pays when booking counts toward the price. Changing the rate '
-              'only affects jobs paid from now on.',
-              style: TextStyle(fontSize: 13, height: 1.45, color: AppColors.muted),
+            Text(
+              'ConnectLocal keeps ${rate.round()}% of each completed job. The provider receives the rest in '
+              'their bank account automatically. The 15% deposit the customer pays when booking counts toward '
+              'the price. The rate is fixed on the server.',
+              style: const TextStyle(fontSize: 13, height: 1.45, color: AppColors.muted),
             ),
             const SizedBox(height: 8),
             AppCard(
@@ -86,40 +75,17 @@ class _AdminEarningsScreenState extends State<AdminEarningsScreen> {
                   Row(
                     children: [
                       const Expanded(
-                        child: Text('Commission',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                        child: Text('Commission', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
                       ),
                       Text('${rate.round()}%',
-                          style: const TextStyle(
-                              fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.teal)),
+                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.teal)),
                     ],
                   ),
-                  Slider(
-                    value: rate,
-                    min: 0,
-                    max: 30,
-                    divisions: 30,
-                    label: '${rate.round()}%',
-                    onChanged: (v) => setState(() => _rate = v),
-                  ),
-                  Text('Example: a R1,000 job → ConnectLocal R${(1000 * rate / 100).round()}, '
-                      'provider R${1000 - (1000 * rate / 100).round()}',
+                  const SizedBox(height: 8),
+                  Text(
+                      'Example: a R1,000 job → ConnectLocal ${money(app.commissionFor(1000))}, '
+                      'provider ${money(1000 - app.commissionFor(1000))}',
                       style: const TextStyle(fontSize: 13, color: AppColors.muted)),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: changed
-                          ? () {
-                              app.setCommissionRate(rate / 100);
-                              setState(() => _rate = null);
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 3), 
-                                  content: Text('Commission set to ${rate.round()}%')));
-                            }
-                          : null,
-                      child: const Text('Save commission'),
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -143,7 +109,7 @@ class _AdminEarningsScreenState extends State<AdminEarningsScreen> {
                                   color: AppColors.text)),
                           const SizedBox(height: 2),
                           Text(
-                              '${app.providerById(p.providerId).name} · ${whenLabel(p.createdAt)}\n'
+                              '${p.businessName ?? app.providerById(p.providerId).name} · ${whenLabel(p.createdAt)}\n'
                               'Job ${money(p.jobTotal)} · provider ${money(p.amount)}',
                               style: const TextStyle(
                                   fontSize: 13, height: 1.4, color: AppColors.muted)),

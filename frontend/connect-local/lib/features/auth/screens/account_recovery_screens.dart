@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../../shared/app_config.dart';
 import '../../shared/figma_ui.dart';
+import '../auth_service.dart';
+import 'login_screen.dart';
+import 'register_screen.dart';
 
 // Figma "Part 1" screens 8, 9, 10:
 //   ForgotPasswordScreen  -> CheckEmailScreen -> (email link) -> CreateNewPasswordScreen
@@ -33,15 +35,28 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     super.dispose();
   }
 
-  void _send() {
+  bool _sending = false;
+
+  Future<void> _send() async {
     final email = _email.text.trim();
+    final messenger = ScaffoldMessenger.of(context);
     if (!_looksLikeEmail(email)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('Please enter a valid email address')),
+      messenger.showSnackBar(
+        const SnackBar(duration: Duration(seconds: 3), content: Text('Please enter a valid email address')),
       );
       return;
     }
-    // TODO (backend): request the password-reset email for [email].
+    if (_sending) return;
+    setState(() => _sending = true);
+    try {
+      await authService.requestPasswordReset(email);
+    } on AuthException catch (e) {
+      messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(e.message)));
+      return;
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+    if (!mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => CheckEmailScreen(email: email)),
@@ -116,7 +131,7 @@ class CheckEmailScreen extends StatelessWidget {
               'assets/images/reset_mailbox.png',
               height: 170,
               fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => const Icon(
+              errorBuilder: (_, _, _) => const Icon(
                 Icons.mark_email_unread_outlined,
                 size: 120,
                 color: FigmaColors.teal,
@@ -169,28 +184,18 @@ class CheckEmailScreen extends StatelessWidget {
           FigmaLinkLine(
             link: 'Resend Link',
             underline: true,
-            onTap: () {
-              // TODO (backend): resend the reset email.
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(duration: const Duration(seconds: 3), content: Text('Reset link sent again')),
-              );
+            onTap: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              try {
+                await authService.requestPasswordReset(email);
+                messenger.showSnackBar(
+                  const SnackBar(duration: Duration(seconds: 3), content: Text('Reset link sent again')),
+                );
+              } on AuthException catch (e) {
+                messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(e.message)));
+              }
             },
           ),
-          // In the real app the user taps the link inside the email, which
-          // opens CreateNewPasswordScreen. This shortcut exists only so the
-          // flow can be tested without a backend. Only shown with DEV_TOOLS=true.
-          if (AppConfig.devTools) ...[
-            const SizedBox(height: 28),
-            TextButton(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const CreateNewPasswordScreen(),
-                ),
-              ),
-              child: const Text('Dev tools: open the reset link'),
-            ),
-          ],
         ],
       ),
     );
@@ -200,8 +205,11 @@ class CheckEmailScreen extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // Screen 10: Create New Password
 // ---------------------------------------------------------------------------
+/// Opened from the reset link in the email (web: `/?type=recovery&token_hash=...`, see SETUP.md).
 class CreateNewPasswordScreen extends StatefulWidget {
-  const CreateNewPasswordScreen({super.key});
+  /// The token from the reset link.
+  final String? token;
+  const CreateNewPasswordScreen({super.key, this.token});
 
   @override
   State<CreateNewPasswordScreen> createState() =>
@@ -224,25 +232,49 @@ class _CreateNewPasswordScreenState extends State<CreateNewPasswordScreen> {
   bool get _hasLength => _password.text.length >= 8;
   bool get _hasUpper => RegExp(r'[A-Z]').hasMatch(_password.text);
   bool get _hasNumber => RegExp(r'[0-9]').hasMatch(_password.text);
+  bool get _hasLower => RegExp(r'[a-z]').hasMatch(_password.text);
+  bool get _hasSymbol => RegExp(r'[^A-Za-z0-9]').hasMatch(_password.text);
 
-  void _update() {
+  bool _saving = false;
+
+  Future<void> _update() async {
     final messenger = ScaffoldMessenger.of(context);
-    if (!(_hasLength && _hasUpper && _hasNumber)) {
-      messenger.showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('Password does not meet the requirements')),
-      );
+    // Same rules as sign-up (and the server).
+    final problem = RegisterScreenRules.problem(_password.text);
+    if (problem != null) {
+      messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(problem)));
       return;
     }
     if (_password.text != _confirm.text) {
       messenger.showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('Passwords do not match')),
+        const SnackBar(duration: Duration(seconds: 3), content: Text('Passwords do not match')),
       );
       return;
     }
-    // TODO (backend): save the new password using the token from the email link.
-    popToRoot(context);
+    final token = widget.token;
+    if (token == null || token.isEmpty) {
+      messenger.showSnackBar(const SnackBar(
+          duration: Duration(seconds: 3), content: Text('Open the reset link from the email again.')));
+      return;
+    }
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await authService.resetPassword(token: token, newPassword: _password.text);
+    } on AuthException catch (e) {
+      messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(e.message)));
+      return;
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+    if (!mounted) return;
+    // The reset link may have opened the app on this screen, so go to Login explicitly.
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
     messenger.showSnackBar(
-      const SnackBar(duration: const Duration(seconds: 3), content: Text('Password updated. Please log in.')),
+      const SnackBar(duration: Duration(seconds: 3), content: Text('Password updated. Please log in.')),
     );
   }
 
@@ -347,6 +379,8 @@ class _CreateNewPasswordScreenState extends State<CreateNewPasswordScreen> {
           _rule('At least 8 characters', _hasLength),
           _rule('At least one uppercase letter', _hasUpper),
           _rule('At least one number', _hasNumber),
+          _rule('At least one small letter', _hasLower),
+          _rule('At least one symbol (e.g. !)', _hasSymbol),
           const SizedBox(height: 28),
           FigmaButton('Update Password', onPressed: _update),
         ],

@@ -5,7 +5,10 @@
 
 import * as bookingRepository from '../repositories/bookingRepository.js';
 import * as paymentService from './paymentService.js';
+import * as payoutService from './payoutService.js';
+import { notifyBookingEvent } from './bookingNotifier.js';
 import logger from '../utils/logger.js';
+import { toLatLng } from '../utils/geo.js';
 import {
   ARRIVAL_PIN_MAX_ATTEMPTS, BOOKING_FEE_RATE, MAX_BOOKING_QUANTITY, bookingFeeFor, roundMoney
 } from '../config/business.js';
@@ -56,11 +59,21 @@ const assertBookingParty = async (actor, booking) => {
   throw new AuthorizationError('You are not a party to this booking');
 };
 
-/** Never send the PIN hash to any client. */
-export const publicBooking = (booking) => {
+const PHONE_VISIBLE_STATUSES = ['accepted', 'in_progress', 'completed'];
+
+/**
+ * What a client may see of a booking: never the PIN hash; the location as {latitude, longitude}; and the
+ * customer's phone number only for the customer themselves, or for the provider once the booking is accepted.
+ */
+export const publicBooking = (booking, viewer = null) => {
   if (!booking) return booking;
   const copy = { ...booking };
   delete copy.arrival_pin_hash;
+  if ('service_location' in copy) copy.service_location = toLatLng(copy.service_location);
+  if (copy.customer && viewer && viewer.id !== copy.customer_id && viewer.role !== 'admin'
+      && !PHONE_VISIBLE_STATUSES.includes(copy.status)) {
+    copy.customer = { ...copy.customer, phone_number: null };
+  }
   return copy;
 };
 
@@ -182,15 +195,20 @@ export const createBooking = async (actor, bookingData) => {
     booking_fee_rate: BOOKING_FEE_RATE,
     booking_fee_amount: bookingFeeFor(totalPrice),
     booking_fee_status: 'pending',
+    status_changed_by: actor.id, // -> booking_status_history (trigger)
+    service_address: bookingData.address?.trim() || null,
+    service_location: Number.isFinite(bookingData.latitude) && Number.isFinite(bookingData.longitude)
+      ? `SRID=4326;POINT(${bookingData.longitude} ${bookingData.latitude})`
+      : null,
     notes: bookingData.notes || null
   });
-  return publicBooking(booking);
+  return publicBooking(booking, actor);
 };
 
 export const getBooking = async (actor, bookingId) => {
   const booking = await bookingRepository.getBookingById(bookingId);
   await assertBookingParty(actor, booking);
-  return publicBooking(booking);
+  return publicBooking(booking, actor);
 };
 
 export const listBookings = async (actor, { status, page: pageValue, limit: limitValue } = {}) => {
@@ -207,7 +225,7 @@ export const listBookings = async (actor, { status, page: pageValue, limit: limi
     filters.providerId = provider.id;
   }
   const result = await bookingRepository.listBookings(filters);
-  return { ...result, bookings: result.bookings.map(publicBooking) };
+  return { ...result, bookings: result.bookings.map((booking) => publicBooking(booking, actor)) };
 };
 
 export const acceptBooking = async (actor, bookingId) => {
@@ -216,15 +234,21 @@ export const acceptBooking = async (actor, bookingId) => {
   if (booking.booking_fee_status !== 'paid') {
     throw new ConflictError('The customer has not paid the booking fee yet');
   }
+  // CLAUDE.md: providers need bank details before accepting bookings (so the payout has somewhere to go).
+  if (!(await payoutService.hasPayoutDetails(booking.provider_id))) {
+    throw new ConflictError('Add your bank details (Payout details) before accepting bookings');
+  }
 
   // The PIN is derived from the booking id; only its hash is stored. The customer sees it via /arrival-pin.
   const updated = await bookingRepository.updateBooking(bookingId, ['pending'], {
     status: 'accepted',
+    status_changed_by: actor.id,
     arrival_pin_hash: hashArrivalPin(booking.id, deriveArrivalPin(booking.id)),
     arrival_pin_attempts: 0,
     arrival_pin_verified_at: null
   });
-  return publicBooking(updated);
+  await notifyBookingEvent('accepted', bookingId);
+  return publicBooking(updated, actor);
 };
 
 export const declineBooking = async (actor, bookingId, reason) => {
@@ -233,12 +257,14 @@ export const declineBooking = async (actor, bookingId, reason) => {
 
   const updated = await bookingRepository.updateBooking(bookingId, ['pending'], {
     status: 'rejected',
+    status_changed_by: actor.id,
     cancelled_by: 'provider',
     cancellation_reason: reason || null
   });
   // Business rule: fee refunded when the provider declines.
   const feeRefund = await tryRefundFee(booking);
-  return { ...publicBooking(updated), feeRefund };
+  await notifyBookingEvent('declined', bookingId, { feeRefund });
+  return { ...publicBooking(updated, actor), feeRefund };
 };
 
 /**
@@ -286,10 +312,11 @@ export const rescheduleBooking = async (actor, bookingId, scheduledStartValue) =
     scheduled_start: scheduledStart.toISOString(),
     scheduled_end: scheduledEnd.toISOString(),
     status: 'pending',
+    status_changed_by: actor.id,
     arrival_pin_hash: null,
     arrival_pin_attempts: 0
   });
-  return publicBooking(updated);
+  return publicBooking(updated, actor);
 };
 
 export const cancelBooking = async (actor, bookingId, reason) => {
@@ -312,6 +339,7 @@ export const cancelBooking = async (actor, bookingId, reason) => {
 
   const updated = await bookingRepository.updateBooking(bookingId, ['pending', 'accepted'], {
     status: 'cancelled',
+    status_changed_by: actor.id,
     cancelled_by: actor.role,
     cancellation_reason: reason || null
   });
@@ -319,7 +347,8 @@ export const cancelBooking = async (actor, bookingId, reason) => {
   // (the customer did nothing wrong). A customer cancelling after acceptance keeps the fee as the deposit.
   const refundable = booking.status === 'pending' || actor.role === 'provider';
   const feeRefund = refundable ? await tryRefundFee(booking) : 'kept';
-  return { ...publicBooking(updated), feeRefund };
+  await notifyBookingEvent('cancelled', bookingId, { feeRefund, by: actor.role });
+  return { ...publicBooking(updated, actor), feeRefund };
 };
 
 /**
@@ -347,9 +376,11 @@ export const startBooking = async (actor, bookingId, pin) => {
 
   const updated = await bookingRepository.updateBooking(bookingId, ['accepted'], {
     status: 'in_progress',
+    status_changed_by: actor.id,
     arrival_pin_verified_at: new Date().toISOString()
   }, { arrival_pin_attempts: attempts });
-  return publicBooking(updated);
+  await notifyBookingEvent('started', bookingId);
+  return publicBooking(updated, actor);
 };
 
 export const completeBooking = async (actor, bookingId) => {
@@ -357,8 +388,25 @@ export const completeBooking = async (actor, bookingId) => {
   if (booking.status !== 'in_progress') {
     throw new ConflictError('Only a job in progress (PIN entered on arrival) can be completed');
   }
-  const updated = await bookingRepository.updateBooking(bookingId, ['in_progress'], { status: 'completed' });
-  return publicBooking(updated);
+  const updated = await bookingRepository.updateBooking(bookingId, ['in_progress'], { status: 'completed', status_changed_by: actor.id });
+  await notifyBookingEvent('completed', bookingId);
+  return publicBooking(updated, actor);
+};
+
+/**
+ * Customer chooses to pay the balance in cash (saved, so it survives app restarts). The provider then
+ * confirms receiving it with confirmCashBalance.
+ */
+export const chooseCashBalance = async (actor, bookingId) => {
+  requireRole(actor, ['customer']);
+  const booking = await bookingRepository.getBookingById(bookingId);
+  if (booking.customer_id !== actor.id) throw new AuthorizationError('You do not own this booking');
+  if (booking.status !== 'completed') throw new ConflictError('The balance is paid after the job is completed');
+  if (booking.balance_status === 'paid') throw new ConflictError('The balance is already paid');
+  const updated = await bookingRepository.updateBooking(bookingId, ['completed'], {
+    balance_payment_method: 'cash'
+  }, { balance_status: booking.balance_status });
+  return publicBooking(updated, actor);
 };
 
 /**
@@ -377,5 +425,6 @@ export default {
   startBooking,
   completeBooking,
   getArrivalPin,
+  chooseCashBalance,
   confirmCashBalance
 };

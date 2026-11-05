@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 
 const repository = {
+  registrationNumberInUse: jest.fn(async () => false),
   getProviderById: jest.fn(),
   getProviderByUserId: jest.fn(),
   createProvider: jest.fn(),
@@ -83,6 +84,17 @@ describe('Provider service', () => {
     await expect(providerService.registerProvider({ id: 'user-1', role: 'provider' }, {
       businessName: 'Drain Repair', registrationNumber: '2019-123456-07', category: 'Plumbing'
     })).rejects.toThrow('YYYY/NNNNNN/TT');
+    expect(repository.createProvider).not.toHaveBeenCalled();
+  });
+
+  test('a registration number another business already applied with is refused', async () => {
+    repository.getProviderByUserId.mockResolvedValue(null);
+    repository.getServiceCategoryByName.mockResolvedValue({ id: 'category-1', name: 'Plumbing' });
+    repository.registrationNumberInUse.mockResolvedValueOnce(true);
+    await expect(providerService.registerProvider({ id: 'user-1', role: 'provider' }, {
+      businessName: 'Drain Repair', registrationNumber: '2019/123456/07', category: 'Plumbing'
+    })).rejects.toThrow('already applied');
+    expect(repository.registrationNumberInUse).toHaveBeenCalledWith('2019/123456/07', null);
     expect(repository.createProvider).not.toHaveBeenCalled();
   });
 

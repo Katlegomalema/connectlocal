@@ -51,6 +51,7 @@ class ApiAuthService implements AuthService {
         }
 
         return AuthResult(
+          userId: (user['id'] as String?) ?? '',
           name: (user['fullName'] as String?) ?? '',
           email: (user['email'] as String?) ?? email.trim(),
           role: role,
@@ -108,5 +109,15 @@ class ApiAuthService implements AuthService {
   @override
   Future<void> resendVerificationEmail(String email) => _guard(() async {
         await api.post('/auth/resend-verification', auth: false, body: {'email': email.trim()});
+      });
+
+  @override
+  Future<void> requestPasswordReset(String email) => _guard(() async {
+        await api.post('/auth/password-reset', auth: false, body: {'email': email.trim()});
+      });
+
+  @override
+  Future<void> resetPassword({required String token, required String newPassword}) => _guard(() async {
+        await api.post('/auth/reset-password', auth: false, body: {'token': token, 'password': newPassword});
       });
 }

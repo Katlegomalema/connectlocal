@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run db:push)",
+      "Bash(npm run db:push *)",
+      "Bash(npm run db:push:dry)"
+    ]
+  }
+}

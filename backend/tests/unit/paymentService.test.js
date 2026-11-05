@@ -18,6 +18,7 @@ const paymentRepository = {
   getReceiptByPaymentId: jest.fn()
 };
 const payfast = {
+  isSandbox: () => true,
   createPayment: jest.fn(),
   verifyItn: jest.fn(),
   processRefund: jest.fn()
@@ -25,6 +26,8 @@ const payfast = {
 
 jest.unstable_mockModule('../../src/repositories/paymentRepository.js', () => paymentRepository);
 jest.unstable_mockModule('../../src/integrations/payfast.js', () => payfast);
+jest.unstable_mockModule('../../src/services/payoutService.js', () => ({ processPendingPayouts: jest.fn(async () => ({})) }));
+jest.unstable_mockModule('../../src/services/bookingNotifier.js', () => ({ notifyBookingEvent: jest.fn(async () => {}) }));
 const paymentService = await import('../../src/services/paymentService.js');
 
 const customer = { id: 'customer-1', role: 'customer' };
@@ -46,6 +49,8 @@ describe('Payment service', () => {
   beforeAll(() => {
     process.env.API_BASE_URL = 'https://api.example.test';
     process.env.FRONTEND_URL = 'https://app.example.test';
+    process.env.PUBLIC_API_URL = 'https://api.example.test';
+    process.env.CODE_HASH_SECRET = process.env.CODE_HASH_SECRET || 'test-only-secret-test-only-secret-test-only-secret';
   });
 
   afterAll(() => {
@@ -74,7 +79,13 @@ describe('Payment service', () => {
       gateway_provider: 'payfast'
     }));
     expect(payfast.createPayment).toHaveBeenCalledWith(expect.objectContaining({ amount: 75, reference: 'payment-1' }));
-    expect(result).toMatchObject({ purpose: 'booking_fee', amount: 75 });
+    expect(result).toMatchObject({ purpose: 'booking_fee', amount: 75, sandbox: true });
+    // The app opens our checkout page (signed, short-lived link), which posts the form to PayFast.
+    expect(result.checkoutUrl).toMatch(/^https:\/\/api\.example\.test\/api\/v1\/payments\/payment-1\/checkout\?e=\d+&t=[0-9a-f]{64}$/);
+    expect(payfast.createPayment).toHaveBeenCalledWith(expect.objectContaining({
+      notify_url: 'https://api.example.test/api/v1/payments/payfast/itn',
+      return_url: 'https://api.example.test/api/v1/payments/return?payment=payment-1'
+    }));
   });
 
   test('balance checkout is refused before the job is completed', async () => {
@@ -131,7 +142,7 @@ describe('Payment service', () => {
     paymentRepository.getBookingById.mockResolvedValue(pendingBooking);
 
     const result = await paymentService.processPayFastItn({
-      custom_str1: 'payment-1', payment_status: 'COMPLETE', amount_gross: '75.00', pf_payment_id: 'pf-1'
+      m_payment_id: '00000000-0000-4000-8000-0000000000a1', payment_status: 'COMPLETE', amount_gross: '75.00', pf_payment_id: 'pf-1'
     }, '192.0.2.1');
 
     expect(paymentRepository.updatePayment).toHaveBeenCalledWith('payment-1', ['pending'], expect.objectContaining({
@@ -141,6 +152,41 @@ describe('Payment service', () => {
     expect(paymentRepository.updateBookingPaymentState).toHaveBeenCalledWith('booking-1', {}, { booking_fee_status: 'paid' });
     expect(paymentRepository.createPayout).not.toHaveBeenCalled();
     expect(result.processed).toBe(true);
+  });
+
+  test('a fee paid from an old checkout tab AFTER the booking was cancelled is refunded straight away', async () => {
+    payfast.verifyItn.mockResolvedValue(true);
+    paymentRepository.getPaymentById.mockResolvedValue({
+      id: 'payment-1', booking_id: 'booking-1', payment_status: 'pending', amount: 75, purpose: 'booking_fee'
+    });
+    paymentRepository.updatePayment.mockResolvedValue({
+      id: 'payment-1', booking_id: 'booking-1', payment_status: 'paid', purpose: 'booking_fee', amount: 75, transaction_reference: 'pf-1'
+    });
+    paymentRepository.getBookingById.mockResolvedValue({ ...pendingBooking, status: 'cancelled' });
+    paymentRepository.getPaymentByBookingAndPurpose.mockResolvedValue({
+      id: 'payment-1', payment_status: 'paid', amount: 75, transaction_reference: 'pf-1'
+    });
+
+    await paymentService.processPayFastItn({
+      m_payment_id: '00000000-0000-4000-8000-0000000000a1', payment_status: 'COMPLETE', amount_gross: '75.00', pf_payment_id: 'pf-1'
+    }, '192.0.2.1');
+
+    expect(payfast.processRefund).toHaveBeenCalledWith('pf-1', 75);
+    expect(paymentRepository.updateBookingPaymentState).toHaveBeenCalledWith('booking-1', { booking_fee_status: 'paid' }, {
+      booking_fee_status: 'refunded'
+    });
+  });
+
+  test('the checkout link refuses a booking that was cancelled after the link was made', async () => {
+    const { checkoutToken } = await import('../../src/utils/secureCodes.js');
+    const expires = Math.floor(Date.now() / 1000) + 600;
+    paymentRepository.getPaymentById.mockResolvedValue({
+      id: 'payment-1', booking_id: 'booking-1', payment_status: 'pending', amount: 75, purpose: 'booking_fee'
+    });
+    paymentRepository.getBookingById.mockResolvedValue({ ...pendingBooking, status: 'cancelled' });
+    await expect(paymentService.getCheckoutForm('payment-1', expires, checkoutToken('payment-1', expires)))
+      .rejects.toThrow('only be paid while the booking is pending');
+    expect(payfast.createPayment).not.toHaveBeenCalled();
   });
 
   test('a verified balance ITN creates the payout with 10% commission', async () => {
@@ -154,7 +200,7 @@ describe('Payment service', () => {
     paymentRepository.getBookingById.mockResolvedValue({ ...pendingBooking, status: 'completed' });
 
     await paymentService.processPayFastItn({
-      custom_str1: 'payment-2', payment_status: 'COMPLETE', amount_gross: '425.00', pf_payment_id: 'pf-2'
+      m_payment_id: '00000000-0000-4000-8000-0000000000a2', payment_status: 'COMPLETE', amount_gross: '425.00', pf_payment_id: 'pf-2'
     }, '192.0.2.1');
 
     expect(paymentRepository.updateBookingPaymentState).toHaveBeenCalledWith('booking-1', {}, {
@@ -176,7 +222,7 @@ describe('Payment service', () => {
       id: 'payment-1', booking_id: 'booking-1', payment_status: 'pending', amount: 75, purpose: 'booking_fee'
     });
     await expect(paymentService.processPayFastItn({
-      custom_str1: 'payment-1', payment_status: 'COMPLETE', amount_gross: '1.00'
+      m_payment_id: '00000000-0000-4000-8000-0000000000a1', payment_status: 'COMPLETE', amount_gross: '1.00'
     }, '192.0.2.1')).rejects.toThrow('does not match');
     expect(paymentRepository.updatePayment).not.toHaveBeenCalled();
   });

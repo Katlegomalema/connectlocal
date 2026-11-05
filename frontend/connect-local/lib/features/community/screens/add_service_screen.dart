@@ -132,7 +132,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
     final room = _maxPhotos - _photos.length;
     if (room <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('You can add up to 6 photos')),
+        const SnackBar(duration: Duration(seconds: 3), content: Text('You can add up to 6 photos')),
       );
       return;
     }
@@ -154,7 +154,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
         final price = r.price;
         if (r.name.text.trim().isEmpty && price == null) continue;
         if (r.name.text.trim().isEmpty || price == null || price <= 0) {
-          messenger.showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
+          messenger.showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
               content: Text('Each package needs a name and a price')));
           return;
         }
@@ -162,7 +162,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
             name: r.name.text.trim(), price: price, description: r.description.text.trim()));
       }
       if (packages.isEmpty) {
-        messenger.showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('Add at least one package')));
+        messenger.showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('Add at least one package')));
         return;
       }
     }
@@ -175,12 +175,12 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
         final p = r.price;
         if (n.isEmpty && p == null) continue;
         if (n.isEmpty || p == null || p <= 0) {
-          messenger.showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
+          messenger.showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
               content: Text('Each extra service needs a name and a price')));
           return;
         }
         if (n.toLowerCase() == business) {
-          messenger.showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
+          messenger.showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
               content: Text('Use the name of the service, not your business name')));
           return;
         }

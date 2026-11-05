@@ -126,7 +126,7 @@ export const refreshProviderRating = async (providerId) => {
   let offset = 0;
   const batchSize = 1000;
 
-  while (true) {
+  for (;;) {
     // eslint-disable-next-line no-await-in-loop -- paging: each batch depends on the previous one
     const { data, error } = await supabase
       .from('reviews')
@@ -158,7 +158,8 @@ export const listVisibleReviews = async (providerId, page, limit) => {
   const offset = (page - 1) * limit;
   const { data, error, count } = await supabase
     .from('reviews')
-    .select('id, booking_id, customer_id, provider_id, rating, review_text, provider_response_text, provider_response_at, created_at', { count: 'exact' })
+    .select('id, booking_id, customer_id, provider_id, rating, review_text, provider_response_text, provider_response_at, created_at, '
+      + 'customer:users(full_name), booking:bookings(service:services(service_name))', { count: 'exact' })
     .eq('provider_id', providerId)
     .eq('is_flagged', false)
     .order('created_at', { ascending: false })

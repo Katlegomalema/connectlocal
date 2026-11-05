@@ -22,11 +22,11 @@ Future<bool> runSignIn(
     final result = await action();
     if (!context.mounted) return false;
     app.signIn(
+      userId: result.userId,
       name: result.name,
       email: result.email,
       isProvider: result.isProvider,
       emailVerified: result.emailVerified,
-      providerId: result.providerId,
       verifiedPhone: result.verifiedPhone,
     );
     // Load categories, providers and (for providers) their own business + application status.
@@ -53,7 +53,7 @@ Future<bool> runSignIn(
     messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(e.message)));
   } catch (_) {
     messenger.showSnackBar(
-      const SnackBar(duration: const Duration(seconds: 3), content: Text('Could not sign in. Please try again.')),
+      const SnackBar(duration: Duration(seconds: 3), content: Text('Could not sign in. Please try again.')),
     );
   }
   return false;

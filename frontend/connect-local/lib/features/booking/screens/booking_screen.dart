@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../community/utils/format.dart';
 
 import '../../community/screens/verify_phone_screen.dart';
 import '../../shared/geocoding.dart';
@@ -87,7 +88,7 @@ class _BookingScreenState extends State<BookingScreen> {
       : _fixed
           ? widget.hourlyRate
           : widget.hourlyRate * _hours;
-  int get _fee => bookingFeeFor(_serviceTotal);
+  double get _fee => bookingFeeFor(_serviceTotal);
 
   String get _dateText => '${_date.day} ${_months[_date.month - 1]} ${_date.year}';
 
@@ -143,7 +144,7 @@ class _BookingScreenState extends State<BookingScreen> {
     if (!mounted) return;
     if (_isPast(slot)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('That time has already passed. Pick a later time.')),
+        const SnackBar(duration: Duration(seconds: 3), content: Text('That time has already passed. Pick a later time.')),
       );
       return;
     }
@@ -153,27 +154,27 @@ class _BookingScreenState extends State<BookingScreen> {
   void _confirm() {
     if (_time == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('Please choose a preferred time')),
+        const SnackBar(duration: Duration(seconds: 3), content: Text('Please choose a preferred time')),
       );
       return;
     }
     if (_isPast(_time!)) {
       setState(() => _time = null);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('That time has already passed. Please select another.')),
+        const SnackBar(duration: Duration(seconds: 3), content: Text('That time has already passed. Please select another.')),
       );
       return;
     }
     if (_address.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('Enter the address where the service is needed')),
+        const SnackBar(duration: Duration(seconds: 3), content: Text('Enter the address where the service is needed')),
       );
       return;
     }
     // Only genuine, verified customers can book.
     if (!AppScope.read(context).emailVerified) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('Please verify your email address before booking (Profile shows your verification status).')),
+        const SnackBar(duration: Duration(seconds: 3), content: Text('Please verify your email address before booking (Profile shows your verification status).')),
       );
       return;
     }
@@ -390,7 +391,7 @@ class _BookingScreenState extends State<BookingScreen> {
                               ),
                             ),
                             const SizedBox(width: 10),
-                            Text('R${widget.packages[i].price}',
+                            Text(money(widget.packages[i].price),
                                 style: const TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w700,
@@ -519,15 +520,15 @@ class _BookingScreenState extends State<BookingScreen> {
                             : _fixed
                                 ? 'Service (${widget.serviceName})'
                                 : 'Service (R${widget.hourlyRate} × $_hours ${_hours == 1 ? 'hour' : 'hours'})',
-                        'R$_serviceTotal'),
+                        money(_serviceTotal)),
 
                     const Padding(
                       padding: EdgeInsets.only(top: 12),
                       child: Divider(height: 1),
                     ),
-                    _priceRow('Pay now (${(kBookingFeeRate * 100).round()}% deposit)', 'R$_fee',
+                    _priceRow('Pay now (${(kBookingFeeRate * 100).round()}% deposit)', money(_fee),
                         bold: true, color: AppColors.teal),
-                    _priceRow('Pay after the service is done', 'R${_serviceTotal - _fee}'),
+                    _priceRow('Pay after the service is done', money(_serviceTotal - _fee)),
                   ],
                 ),
               ),
@@ -537,7 +538,7 @@ class _BookingScreenState extends State<BookingScreen> {
                 style: TextStyle(fontSize: 13, height: 1.4, color: AppColors.textGrey),
               ),
               const SizedBox(height: 20),
-              TealButton('Pay R$_fee deposit', height: 52, onPressed: _confirm),
+              TealButton('Pay ${money(_fee)} deposit', height: 52, onPressed: _confirm),
               const SizedBox(height: 12),
             ],
           ),

@@ -27,9 +27,10 @@ class ProfileScreen extends StatelessWidget {
         initialEmail: app.customerEmail,
       ),
     );
-    if (result != null) {
-      app.updateCustomerProfile(name: result.name, email: result.email);
-    }
+    if (result == null || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final error = await app.updateCustomerProfile(name: result.name, email: result.email);
+    messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(error ?? 'Profile saved')));
   }
 
   void _openSection(BuildContext context, String title) {
@@ -157,7 +158,7 @@ class ProfileScreen extends StatelessWidget {
                   _ => 'Offer your services and earn',
                 },
                 onTap: () => app.myApplication?.status == ApplicationStatus.pending
-                    ? ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
+                    ? ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
                         content: Text('Your application is being reviewed. You will be notified.')))
                     : openBecomeProvider(context),
               ),

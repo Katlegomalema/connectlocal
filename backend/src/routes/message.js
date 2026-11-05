@@ -9,8 +9,10 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validation.js';
 import * as messageService from '../services/messageService.js';
+import { ValidationError } from '../utils/errors.js';
 
 const router = express.Router();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const sendMessageSchema = z.object({
   conversationId: z.string().uuid().optional(),
   receiverId: z.string().uuid().optional(),
@@ -36,31 +38,24 @@ router.post('/', verifyToken, validateBody(sendMessageSchema), asyncHandler(asyn
   res.status(201).json({
     success: true,
     message: 'Message sent successfully',
-    data: message
+    data: messageService.publicMessage(message, req.user)
   });
+}));
+
+/**
+ * GET /api/v1/messages/booking/:bookingId
+ * The chat of one booking (customer <-> provider). Marks received messages as read.
+ */
+router.get('/booking/:bookingId', verifyToken, asyncHandler(async (req, res) => {
+  if (!UUID.test(req.params.bookingId)) throw new ValidationError('bookingId must be a valid id');
+  res.set('Cache-Control', 'no-store');
+  const chat = await messageService.getBookingMessages(req.user, req.params.bookingId);
+  res.status(200).json({ success: true, data: chat });
 }));
 
 router.post('/conversations', verifyToken, validateBody(conversationSchema), asyncHandler(async (req, res) => {
   const conversation = await messageService.getOrCreateConversation(req.user, req.validatedBody);
   res.status(200).json({ success: true, data: conversation });
-}));
-
-/**
- * GET /api/v1/messages/:conversationId
- * Fetch message history for a conversation
- * Query params: page, limit
- */
-router.get('/:conversationId', verifyToken, asyncHandler(async (req, res) => {
-  const result = await messageService.getConversation(
-    req.user,
-    req.params.conversationId,
-    req.query.page,
-    req.query.limit
-  );
-  res.status(200).json({
-    success: true,
-    data: result
-  });
 }));
 
 /**
@@ -77,6 +72,25 @@ const listConversationsHandler = asyncHandler(async (req, res) => {
 
 router.get('/', verifyToken, listConversationsHandler);
 router.get('/conversations', verifyToken, listConversationsHandler);
+
+/**
+ * GET /api/v1/messages/:conversationId
+ * Fetch message history for a conversation
+ * Query params: page, limit
+ */
+router.get('/:conversationId', verifyToken, asyncHandler(async (req, res) => {
+  if (!UUID.test(req.params.conversationId)) throw new ValidationError('conversationId must be a valid id');
+  const result = await messageService.getConversation(
+    req.user,
+    req.params.conversationId,
+    req.query.page,
+    req.query.limit
+  );
+  res.status(200).json({
+    success: true,
+    data: result
+  });
+}));
 
 /**
  * PUT /api/v1/messages/:id/read

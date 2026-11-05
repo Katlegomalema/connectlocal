@@ -5,21 +5,6 @@ import '../../community/state/app_state.dart';
 import '../../community/theme/app_theme.dart';
 import '../../community/widgets/ui_kit.dart';
 
-class _User {
-  final String name;
-  final String email;
-  final String role; // Customer, Provider, Admin
-  final String since;
-  final int services;
-  final int bookings;
-  final UserAccount? account;
-
-  bool get disabled => account?.disabled ?? false;
-
-  _User(this.name, this.email, this.role, this.since,
-      {this.services = 0, this.bookings = 0, this.account});
-}
-
 // Screen 34 - Admin Users
 class AdminUsersScreen extends StatefulWidget {
   final String initialFilter;
@@ -37,37 +22,27 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && AppScope.read(context).adminUsers.isEmpty) AppScope.read(context).loadAdminData();
+    });
     _filter = ['ALL', 'Customers', 'Providers', 'Admins'].contains(widget.initialFilter)
         ? widget.initialFilter
         : 'ALL';
   }
 
-  /// Real accounts people created in the app (plus the built-in admin).
-  List<_User> _loadUsers(AppState app) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    String since(DateTime d) => '${months[d.month - 1]} ${d.year}';
-    return [
-      for (final a in app.accounts)
-        () {
-          final business = app.providerOwnedBy(a.email);
-          return _User(
-            a.name,
-            a.email,
-            business == null ? 'Customer' : 'Provider',
-            since(a.createdAt),
-            services: business?.services.length ?? 0,
-            bookings: business == null
-                ? 0
-                : app.allBookings.where((b) => b.providerId == business.id).length,
-            account: a,
-          );
-        }(),
-      _User('Admin User', 'admin@email.com', 'Admin', 'Built-in'),
-    ];
-  }
+  static const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  static String _since(DateTime d) => '${_months[d.month - 1]} ${d.year}';
+  static String _roleLabel(String role) => switch (role) {
+        'provider' => 'Provider',
+        'admin' => 'Admin',
+        _ => 'Customer',
+      };
 
-  bool _matches(_User u) {
-    final roleOk = _filter == 'ALL' || u.role == _filter.substring(0, _filter.length - 1);
+  final Set<String> _busy = {};
+
+
+  bool _matches(AdminUser u) {
+    final roleOk = _filter == 'ALL' || _roleLabel(u.role) == _filter.substring(0, _filter.length - 1);
     final q = _query.trim().toLowerCase();
     final queryOk =
         q.isEmpty || u.name.toLowerCase().contains(q) || u.email.toLowerCase().contains(q);
@@ -78,9 +53,18 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(text)));
   }
 
-  Widget _tile(_User u) {
-    final isProvider = u.role == 'Provider';
-    final roleColor = u.role == 'Admin'
+  Future<void> _toggle(AdminUser u) async {
+    setState(() => _busy.add(u.id));
+    final error = await AppScope.read(context).setUserActive(u, !u.isActive);
+    if (!mounted) return;
+    setState(() => _busy.remove(u.id));
+    _message(error ?? '${u.name} ${u.isActive ? 'can sign in again' : 'is suspended (cannot sign in)'}');
+  }
+
+  Widget _tile(AdminUser u) {
+    final role = _roleLabel(u.role);
+    final isProvider = u.role == 'provider';
+    final roleColor = u.role == 'admin'
         ? AppColors.navy
         : isProvider
             ? AppColors.teal
@@ -106,30 +90,28 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                 Text(u.email, style: const TextStyle(fontSize: 13, color: AppColors.muted)),
                 const SizedBox(height: 2),
                 Text(
-                  isProvider
-                      ? 'Since ${u.since} · ${u.services} services · ${u.bookings} bookings'
-                      : 'Since ${u.since}',
+                  isProvider && u.businessName != null
+                      ? 'Since ${_since(u.createdAt)} · ${u.businessName} (${u.businessStatus ?? 'draft'})'
+                      : 'Since ${_since(u.createdAt)}',
                   style: const TextStyle(fontSize: 13, color: AppColors.muted),
                 ),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
                   children: [
-                    StatusChip(u.role, color: roleColor),
-                    if (u.disabled) const StatusChip('Disabled', color: AppColors.accent),
+                    StatusChip(role, color: roleColor),
+                    if (!u.isActive)
+                      StatusChip(u.status == 'deactivated' ? 'Deactivated' : 'Suspended', color: AppColors.accent),
                   ],
                 ),
               ],
             ),
           ),
-          if (u.account != null)
+          // Admins cannot be suspended here (the server also refuses suspending yourself).
+          if (u.role != 'admin' && u.status != 'deactivated')
             TextButton(
-              onPressed: () {
-                final app = AppScope.read(context);
-                app.setAccountDisabled(u.account!, !u.account!.disabled);
-                _message('${u.name} ${u.account!.disabled ? 'disabled' : 'enabled'}');
-              },
-              child: Text(u.disabled ? 'Enable' : 'Disable'),
+              onPressed: _busy.contains(u.id) ? null : () => _toggle(u),
+              child: Text(u.isActive ? 'Suspend' : 'Re-activate'),
             ),
         ],
       ),
@@ -138,7 +120,8 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final shown = _loadUsers(AppScope.of(context)).where(_matches).toList();
+    final app = AppScope.of(context);
+    final shown = app.adminUsers.where(_matches).toList();
     return Scaffold(
       appBar: AppBar(title: const Text('All users')),
       body: SafeArea(
@@ -160,14 +143,21 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
               onChanged: (i) => setState(() => _filter = _filters[i]),
             ),
             Expanded(
-              child: shown.isEmpty
-                  ? const EmptyState(icon: Icons.person_search_outlined, title: 'No users found')
+              child: RefreshIndicator(
+                onRefresh: () => app.loadAdminData(),
+                child: shown.isEmpty
+                  ? ListView(children: const [
+                      SizedBox(height: 60),
+                      EmptyState(icon: Icons.person_search_outlined, title: 'No users found'),
+                    ])
                   : ListView.separated(
+                      physics: const AlwaysScrollableScrollPhysics(),
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
                       itemCount: shown.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
                       itemBuilder: (_, i) => _tile(shown[i]),
                     ),
+              ),
             ),
           ],
         ),

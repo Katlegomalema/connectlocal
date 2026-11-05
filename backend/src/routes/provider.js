@@ -9,6 +9,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken, requireRole, optionalToken } from '../middleware/auth.js';
 import { validateBody, validateUuidParam } from '../middleware/validation.js';
 import * as providerService from '../services/providerService.js';
+import * as payoutService from '../services/payoutService.js';
 import * as searchService from '../services/searchService.js';
 
 const router = express.Router();
@@ -231,6 +232,30 @@ router.post('/me/services/:serviceId/photos', verifyToken, requireRole('provider
 router.delete('/me/services/:serviceId/photos/:imageId', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {
   const result = await providerService.removeServicePhoto(req.user, req.params.serviceId, req.params.imageId);
   res.status(200).json({ success: true, data: result });
+}));
+
+// ---- payouts: bank details (account number encrypted, only last 4 digits returned) + payout history ----
+const payoutDetailsSchema = z.object({
+  bankName: z.string().trim().min(2).max(100),
+  accountType: z.enum(['Cheque / Current', 'Savings', 'Transmission']),
+  accountHolderName: z.string().trim().min(2).max(150),
+  accountNumber: z.string().trim().regex(/^[\d\s-]{9,15}$/, 'Account numbers have 9 to 11 digits'),
+  branchCode: z.string().trim().regex(/^\d{6}$/, 'Branch codes have 6 digits')
+}).strict();
+
+router.get('/me/payout-details', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: { payoutDetails: await payoutService.getPayoutDetails(req.user) } });
+}));
+
+router.put('/me/payout-details', verifyToken, requireRole('provider'), validateBody(payoutDetailsSchema), asyncHandler(async (req, res) => {
+  const payoutDetails = await payoutService.savePayoutDetails(req.user, req.validatedBody);
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, message: 'Bank details saved', data: { payoutDetails } });
+}));
+
+router.get('/me/payouts', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {
+  res.status(200).json({ success: true, data: { payouts: await payoutService.listMyPayouts(req.user) } });
 }));
 
 router.get('/me/availability', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {

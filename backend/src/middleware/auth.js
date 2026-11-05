@@ -72,7 +72,7 @@ export const requireRole = (...allowedRoles) => (req, res, next) => {
     ));
   }
 
-  next();
+  return next();
 };
 
 /**
@@ -110,5 +110,5 @@ export const requireOwnership = (paramName = 'id') => (req, res, next) => {
     return next(new AuthorizationError('You do not have permission to access this resource'));
   }
 
-  next();
+  return next();
 };

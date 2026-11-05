@@ -148,7 +148,7 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
     final room = _maxImages - _photos.length;
     if (room <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('You can add up to 6 images')),
+        const SnackBar(duration: Duration(seconds: 3), content: Text('You can add up to 6 images')),
       );
       return;
     }
@@ -163,7 +163,7 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (here == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
           content: Text('Couldn\u2019t get your location. Allow location access or type the address.')));
       return;
     }
@@ -191,7 +191,7 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
         _regNumber.text.trim().isEmpty ||
         _idNumber.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('Please fill in all the fields')),
+        const SnackBar(duration: Duration(seconds: 3), content: Text('Please fill in all the fields')),
       );
       return;
     }
@@ -199,15 +199,12 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(m)));
     final regProblem = checkRegistrationNumber(_regNumber.text);
     if (regProblem != null) return warn(regProblem);
-    if (AppScope.read(context).registrationNumberTaken(_regNumber.text)) {
-      return warn('A business with this registration number has already applied');
-    }
     final id = parseSaId(_idNumber.text);
     if (id == null) return warn('That South African ID number is not valid');
     if (id.age < 18) return warn('You must be 18 or older to become a provider');
     if (_idDoc == null) return warn('Please upload a photo of your ID document');
     if (_regDoc == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
           content: Text('Please upload your business registration document')));
       return;
     }
@@ -461,7 +458,7 @@ class ApplicationSubmittedScreen extends StatelessWidget {
               'assets/images/application_submitted.png',
               height: 150,
               fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => const Icon(
+              errorBuilder: (_, _, _) => const Icon(
                 Icons.mark_email_read_outlined,
                 size: 110,
                 color: FigmaColors.teal,

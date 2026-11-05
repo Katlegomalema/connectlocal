@@ -28,7 +28,7 @@ class NoBookingsScreen extends StatelessWidget {
                 'Browse Services',
                 onPressed: onBrowseServices ??
                     () => ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(duration: const Duration(seconds: 3), 
+                          const SnackBar(duration: Duration(seconds: 3), 
                             content: Text('Connect this button to your services screen.'),
                           ),
                         ),

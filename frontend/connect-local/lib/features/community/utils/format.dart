@@ -1,4 +1,8 @@
-String money(num amount) => 'R${amount.toStringAsFixed(0)}';
+/// "R450", "R67.50" (cents only when there are any).
+String money(num amount) {
+  final cents = (amount * 100).round();
+  return cents % 100 == 0 ? 'R${cents ~/ 100}' : 'R${(cents / 100).toStringAsFixed(2)}';
+}
 
 String formatTime(DateTime value) {
   final hour = value.hour % 12 == 0 ? 12 : value.hour % 12;

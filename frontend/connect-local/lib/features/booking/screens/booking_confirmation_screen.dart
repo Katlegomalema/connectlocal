@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../community/utils/format.dart';
 
 import '../../community/screens/customer_bookings_screen.dart';
 import '../models/booking_request.dart';
@@ -38,7 +39,7 @@ class BookingConfirmationScreen extends StatelessWidget {
               const SizedBox(height: 10),
               Text(
                 'Your deposit is paid. ${request.providerName} will review your '
-                'request. Once they accept, you’ll pay R${request.serviceTotal} for the service.',
+                'request. Once they accept, you’ll pay ${money(request.serviceTotal)} for the service.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 14, height: 1.45, color: AppColors.textGrey),
               ),
@@ -54,8 +55,8 @@ class BookingConfirmationScreen extends StatelessWidget {
                     InfoLine('Date: ${request.date}'),
                     InfoLine('Time: ${request.time}  ($hours)'),
                     InfoLine('Address: ${request.address}'),
-                    InfoLine('Deposit paid: R${request.fee} (counts toward the price)'),
-                    InfoLine('Due after acceptance: R${request.serviceTotal}'),
+                    InfoLine('Deposit paid: ${money(request.fee)} (counts toward the price)'),
+                    InfoLine('Due after acceptance: ${money(request.serviceTotal)}'),
                     const InfoLine('Status: Awaiting provider'),
                   ],
                 ),

@@ -4,13 +4,13 @@
  */
 
 import * as adminRepository from '../repositories/adminRepository.js';
-import * as userRepository from '../repositories/userRepository.js';
 import * as reviewRepository from '../repositories/reviewRepository.js';
 import * as reviewService from './reviewService.js';
 import * as notificationService from './notificationService.js';
 import * as storage from '../integrations/storage.js';
 import logger from '../utils/logger.js';
 import { toLatLng } from '../utils/geo.js';
+import { COMMISSION_RATE } from '../config/business.js';
 import { AuthorizationError, ValidationError } from '../utils/errors.js';
 
 const requireAdmin = (actor) => {
@@ -35,9 +35,33 @@ export const listUsers = async (actor, filters = {}) => {
   if (filters.status && !['active', 'suspended', 'deactivated'].includes(filters.status)) {
     throw new ValidationError('Invalid account status filter');
   }
-  const result = await userRepository.listUsers(filters, page, limit);
+  const result = await adminRepository.listUsersWithBusiness({
+    role: filters.role, status: filters.status, query: filters.q, page, limit
+  });
   return {
-    users: result.data, total: result.total, page: result.page, pages: result.pages
+    users: result.rows.map((user) => {
+      const business = Array.isArray(user.business) ? user.business[0] : user.business;
+      let status = 'active';
+      if (user.deleted_at) status = 'deactivated';
+      else if (!user.is_active) status = 'suspended';
+      return {
+        id: user.id,
+        fullName: user.full_name,
+        email: user.email,
+        phoneNumber: user.phone_number,
+        role: user.role,
+        status,
+        emailVerified: user.email_verified,
+        phoneVerified: user.phone_verified,
+        createdAt: user.created_at,
+        business: business
+          ? { id: business.id, name: business.business_name, verificationStatus: business.verification_status }
+          : null
+      };
+    }),
+    total: result.total,
+    page: result.page,
+    pages: result.pages
   };
 };
 
@@ -176,15 +200,124 @@ export const hideReview = async (actor, reviewId) => {
 
 export const getAnalytics = async (actor) => {
   requireAdmin(actor);
-  const [totalUsers, totalProviders, totalBookings, totalRevenue, averageRating] = await Promise.all([
+  const [
+    totalUsers, totalProviders, verifiedProviders, totalBookings, totalRevenue, averageRating,
+    commissionEarned, paidOut
+  ] = await Promise.all([
     adminRepository.countRows('users', { deleted_at: null }),
     adminRepository.countRows('providers'),
+    adminRepository.countRows('providers', { verification_status: 'verified' }),
     adminRepository.countRows('bookings'),
     adminRepository.getPaidRevenue(),
-    adminRepository.getAverageProviderRating()
+    adminRepository.getAverageProviderRating(),
+    adminRepository.sumColumn('payouts', 'commission_amount', { status: 'paid' }),
+    adminRepository.sumColumn('payouts', 'payout_amount', { status: 'paid' })
   ]);
   return {
-    totalUsers, totalProviders, totalBookings, totalRevenue, averageRating
+    totalUsers,
+    totalProviders,
+    verifiedProviders,
+    totalBookings,
+    totalRevenue,
+    averageRating,
+    commissionRate: COMMISSION_RATE,
+    commissionEarned,
+    paidOut
+  };
+};
+
+const ADMIN_BOOKING_STATUSES = ['pending', 'accepted', 'in_progress', 'completed', 'cancelled', 'rejected'];
+
+/** Every booking (newest first). Admins see the customer phone; never the PIN hash. */
+export const listBookings = async (actor, filters = {}) => {
+  requireAdmin(actor);
+  const { page, limit } = parsePagination(filters.page, filters.limit);
+  if (filters.status && !ADMIN_BOOKING_STATUSES.includes(filters.status)) {
+    throw new ValidationError('Invalid booking status');
+  }
+  const result = await adminRepository.listAllBookings({ status: filters.status, page, limit });
+  return {
+    bookings: result.rows.map((row) => {
+      const copy = { ...row, service_location: toLatLng(row.service_location) };
+      delete copy.arrival_pin_hash;
+      return copy;
+    }),
+    total: result.total,
+    page,
+    pages: result.pages
+  };
+};
+
+const bookingNames = (booking) => ({
+  serviceName: booking?.service?.service_name ?? null,
+  businessName: booking?.provider?.business_name ?? null,
+  customerName: booking?.customer?.full_name ?? null
+});
+
+export const listPayments = async (actor, filters = {}) => {
+  requireAdmin(actor);
+  const { page, limit } = parsePagination(filters.page, filters.limit);
+  const result = await adminRepository.listAllPayments({ page, limit });
+  return {
+    payments: result.rows.map((p) => ({
+      id: p.id,
+      bookingId: p.booking_id,
+      amount: Number(p.amount),
+      currency: p.currency,
+      purpose: p.purpose,
+      method: p.method,
+      status: p.payment_status,
+      gateway: p.gateway_provider,
+      reference: p.transaction_reference,
+      refundedAmount: Number(p.refunded_amount || 0),
+      paidAt: p.paid_at,
+      createdAt: p.created_at,
+      ...bookingNames(p.booking)
+    })),
+    total: result.total,
+    page,
+    pages: result.pages
+  };
+};
+
+export const listPayouts = async (actor, filters = {}) => {
+  requireAdmin(actor);
+  const { page, limit } = parsePagination(filters.page, filters.limit);
+  const result = await adminRepository.listAllPayouts({ page, limit });
+  return {
+    payouts: result.rows.map((p) => {
+      const bank = Array.isArray(p.provider?.bank) ? p.provider.bank[0] : p.provider?.bank;
+      return {
+        id: p.id,
+        bookingId: p.booking_id,
+        providerId: p.provider_id,
+        grossAmount: Number(p.gross_amount),
+        commissionRate: Number(p.commission_rate),
+        commissionAmount: Number(p.commission_amount),
+        cashCollectedAmount: Number(p.cash_collected_amount),
+        payoutAmount: Number(p.payout_amount),
+        status: p.status,
+        reference: p.payout_reference,
+        note: p.failure_reason,
+        paidAt: p.paid_at,
+        createdAt: p.created_at,
+        ...bookingNames(p.booking),
+        businessName: p.provider?.business_name ?? null,
+        // Masked: bank, holder, branch and the LAST 4 digits only.
+        bank: bank
+          ? {
+            bankName: bank.bank_name,
+            accountType: bank.account_type,
+            accountHolderName: bank.account_holder_name,
+            branchCode: bank.branch_code,
+            accountLast4: bank.account_last4
+          }
+          : null
+      };
+    }),
+    total: result.total,
+    page,
+    pages: result.pages
   };
 };
 
@@ -219,6 +352,9 @@ export default {
   listReviews,
   hideReview,
   getAnalytics,
+  listBookings,
+  listPayments,
+  listPayouts,
   listDisputes,
   resolveDispute
 };

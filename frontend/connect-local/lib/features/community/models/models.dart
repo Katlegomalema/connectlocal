@@ -6,10 +6,14 @@ import '../../shared/photo.dart';
 /// service cost. It is separate from what the provider earns.
 const double kBookingFeeRate = 0.15;
 
-int bookingFeeFor(int serviceTotal) => (serviceTotal * kBookingFeeRate).round();
+/// Round to the cent, half up (same as the backend's roundMoney).
+double roundMoney(num amount) => ((amount * 100) + 1e-9).round() / 100;
 
-/// ConnectLocal's cut of each job (taken from the provider's payout). The admin
-/// can change it; this is the starting value.
+/// The 15% booking fee, exact to the cent (R450 -> R67.50). The backend computes the same.
+double bookingFeeFor(num serviceTotal) => roundMoney(serviceTotal * kBookingFeeRate);
+
+/// ConnectLocal's cut of each job (taken from the provider's payout). Fixed by the business rules; the
+/// backend applies it (the admin site shows the value the server reports).
 const double kDefaultCommissionRate = 0.10;
 
 /// How a payment is made. Cards go through PayFast; cash is handed to the provider.
@@ -39,30 +43,23 @@ enum PaymentKind {
 }
 
 enum PaymentStatus {
-  /// Cash promised but not yet confirmed by the provider.
+  /// Card checkout started but PayFast has not confirmed it yet.
   pending('Pending'),
   paid('Paid'),
-
-  /// Card payment for the service: held by ConnectLocal until the customer's
-  /// PIN proves the job was done.
-  held('Held by ConnectLocal'),
-
-  /// Held payment released to the provider after the PIN was entered.
-  released('Released to provider'),
+  failed('Failed'),
   refunded('Refunded');
 
   final String label;
   const PaymentStatus(this.label);
 }
 
-/// One recorded payment (kept for receipts and so each transaction can be
-/// checked later). TODO (backend): store these server-side.
+/// One payment as the server recorded it (table `payments`).
 class PaymentRecord {
   final String id;
   final String bookingId;
   final PaymentKind kind;
   final PayMethod method;
-  final int amount;
+  final double amount;
   final DateTime createdAt;
 
   /// PayFast's own payment id (pf_payment_id); null for cash.
@@ -71,8 +68,13 @@ class PaymentRecord {
   PaymentStatus status;
 
   /// True when the payment was confirmed: for card by PayFast's server
-  /// notification (ITN), for cash by the provider handing over the PIN check.
+  /// notification (ITN), for cash by the provider.
   bool verified;
+
+  /// Admin view: what the payment was for.
+  final String? serviceName;
+  final String? customerName;
+  final String? businessName;
 
   PaymentRecord({
     required this.id,
@@ -84,6 +86,9 @@ class PaymentRecord {
     this.gatewayReference,
     this.status = PaymentStatus.paid,
     this.verified = false,
+    this.serviceName,
+    this.customerName,
+    this.businessName,
   });
 }
 
@@ -113,16 +118,84 @@ enum BookingStage {
   const BookingStage(this.label);
 }
 
+/// One chat message of a booking (server table `messages`).
 @immutable
 class ChatMessage {
+  final String id;
   final String text;
   final DateTime sentAt;
-  final bool fromProvider;
+
+  /// Sent by the person using the app.
+  final bool mine;
+  final bool isRead;
 
   const ChatMessage({
+    required this.id,
     required this.text,
     required this.sentAt,
-    required this.fromProvider,
+    required this.mine,
+    this.isRead = false,
+  });
+}
+
+/// The latest message of a booking's chat, for the Messages list.
+@immutable
+class ConversationSummary {
+  final String bookingId;
+  final String lastMessage;
+  final DateTime lastAt;
+  final bool lastMine;
+  final int unread;
+  const ConversationSummary({
+    required this.bookingId,
+    required this.lastMessage,
+    required this.lastAt,
+    required this.lastMine,
+    required this.unread,
+  });
+}
+
+/// An in-app notification (server table `notifications`).
+class AppNotification {
+  final String id;
+  final String title;
+  final String body;
+
+  /// booking | payment | message | review | system
+  final String type;
+  final DateTime createdAt;
+  final String? bookingId;
+  bool isRead;
+
+  AppNotification({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.type,
+    required this.createdAt,
+    this.bookingId,
+    this.isRead = false,
+  });
+}
+
+/// A customer's review of a provider, as shown publicly (first name only).
+@immutable
+class ReviewItem {
+  final String id;
+  final int rating;
+  final String comment;
+  final String customerFirstName;
+  final String serviceName;
+  final DateTime createdAt;
+  final String? providerResponse;
+  const ReviewItem({
+    required this.id,
+    required this.rating,
+    required this.comment,
+    required this.customerFirstName,
+    required this.serviceName,
+    required this.createdAt,
+    this.providerResponse,
   });
 }
 
@@ -210,8 +283,7 @@ class ProviderModel {
   /// The business's profile picture (logo or portrait).
   PhotoRef? avatar;
 
-  /// Where the provider works. TODO (DB): load from the backend / geocode the
-  /// address the provider entered.
+  /// Where the provider works (from the server; set from the address the provider entered).
   double? latitude;
   double? longitude;
   final List<ServiceModel> services;
@@ -231,7 +303,13 @@ class ProviderModel {
     this.longitude,
     this.distanceIsLive = false,
     this.verified = false,
+    this.description = '',
+    this.address = '',
   });
+
+  /// The business description and street address (the provider's own business, from the server).
+  String description;
+  String address;
 
   /// The picture to show for this provider in lists: their own profile
   /// picture, else the first photo of any of their active services.
@@ -271,8 +349,8 @@ class Booking {
   /// earns; the deposit is not included.
   final int price;
 
-  /// Deposit (15% of [price]) paid by the customer with the request.
-  final int bookingFee;
+  /// Deposit (15% of [price], exact to the cent) paid by the customer with the request.
+  final double bookingFee;
 
   /// True once the customer has paid the [price] (after the provider accepted).
   bool balancePaid;
@@ -300,7 +378,7 @@ class Booking {
   double? longitude;
 
   final double distanceKm;
-  final String phone;
+  String phone; // the customer's number becomes visible to the provider once accepted
   final String address;
   final String notes;
   BookingStatus status;
@@ -315,7 +393,7 @@ class Booking {
     required this.price,
     this.hours = 1,
     this.packageName,
-    int? bookingFee,
+    double? bookingFee,
     this.balancePaid = false,
     this.feeRefunded = false,
     this.rating,
@@ -327,14 +405,24 @@ class Booking {
     this.address = '',
     this.notes = '',
     this.status = BookingStatus.pending,
+    this.customerId,
   }) : bookingFee = bookingFee ?? bookingFeeFor(price);
+
+  /// The customer's user id (server). Decides whose booking it is, not the name.
+  final String? customerId;
+
+  /// Admin view: the business name (the admin site has no provider list).
+  String? businessName;
 
   /// What the customer pays in total. The 15% deposit counts
   /// toward the price, so the total is just [price].
   int get customerTotal => price;
 
-  /// What is still to pay after the job: the price minus the deposit.
-  int get balance => price > bookingFee ? price - bookingFee : 0;
+  /// What is still to pay after the job: the price minus the deposit (to the cent).
+  double get balance => balanceAmount ?? (price > bookingFee ? roundMoney(price - bookingFee) : 0);
+
+  /// The balance exactly as the server computed it (to the cent), when known.
+  double? balanceAmount;
 
   /// "Install 3 CCTV cameras" or "2 hours".
   String get quantityLabel => packageName ?? (hours == 1 ? '1 hour' : '$hours hours');
@@ -449,8 +537,8 @@ class ProviderApplicationRecord {
 }
 
 
-/// Where a provider's earnings are paid (their bank account). TODO (backend):
-/// store this server-side, encrypted, and never return the full number to apps.
+/// Where a provider's earnings are paid (their bank account). The server stores the number encrypted and
+/// only ever returns the last 4 digits ([accountNumber] then holds "•••••1234").
 class PayoutAccount {
   String bank;
   String accountType;
@@ -490,17 +578,24 @@ class Payout {
   final String serviceName;
   final String clientName;
   /// What the provider receives (job total minus ConnectLocal's commission).
-  final int amount;
+  final double amount;
 
   /// The full price of the job and ConnectLocal's commission on it.
-  final int jobTotal;
-  final int commission;
+  final double jobTotal;
+  final double commission;
   final DateTime createdAt;
   PayoutStatus status;
   DateTime? paidAt;
 
-  /// The EFT reference the admin entered when paying.
+  /// The transfer reference (SIM-... while payouts are simulated in the PayFast sandbox).
   String? reference;
+
+  /// Admin view: the business and its (masked) bank account, e.g. "FNB · Savings · •••• 5678".
+  final String? businessName;
+  final String? bankLabel;
+
+  /// Why a payout is still waiting (e.g. "Waiting for bank details").
+  final String? note;
 
   Payout({
     required this.id,
@@ -509,43 +604,46 @@ class Payout {
     required this.serviceName,
     required this.clientName,
     required this.amount,
-    int? jobTotal,
+    num? jobTotal,
     this.commission = 0,
     required this.createdAt,
     this.status = PayoutStatus.due,
     this.paidAt,
     this.reference,
-  }) : jobTotal = jobTotal ?? amount + commission;
+    this.businessName,
+    this.bankLabel,
+    this.note,
+  }) : jobTotal = (jobTotal ?? amount + commission).toDouble();
 }
 
 
-/// A person's sign-in account (customer, and provider once approved).
-/// The password is stored only as a salted hash. TODO (backend): replaced by
-/// Supabase Auth; this class then only holds the profile fields.
-class UserAccount {
-  String name;
+/// A user account as the admin website sees it.
+class AdminUser {
+  final String id;
+  final String name;
   final String email;
-  final String salt;
-  final String passwordHash;
+
+  /// customer | provider | admin
+  final String role;
+
+  /// active | suspended | deactivated
+  String status;
   final DateTime createdAt;
-  bool emailVerified;
-  String phone;
-  String? verifiedPhone;
-  String address;
+  final String? businessName;
 
-  /// Admin switch: a disabled account can't sign in.
-  bool disabled;
+  /// draft | pending | verified | rejected | suspended (providers only)
+  final String? businessStatus;
 
-  UserAccount({
+  AdminUser({
+    required this.id,
     required this.name,
     required this.email,
-    required this.salt,
-    required this.passwordHash,
+    required this.role,
+    required this.status,
     required this.createdAt,
-    this.emailVerified = false,
-    this.phone = '',
-    this.verifiedPhone,
-    this.address = '',
-    this.disabled = false,
+    this.businessName,
+    this.businessStatus,
   });
+
+  bool get isActive => status == 'active';
 }

@@ -7,13 +7,13 @@ import '../../community/utils/format.dart';
 import '../../community/widgets/stat_card.dart';
 import '../../community/widgets/ui_kit.dart';
 
-/// Every payment recorded by the app, with totals. Card/EFT/Apple Pay payments
-/// are confirmed by PayFast; cash is confirmed by the provider with the PIN.
+/// Every payment the server recorded (table `payments`), with totals. Card payments are confirmed by
+/// PayFast's ITN; cash balances are confirmed by the provider.
 class AdminPaymentsScreen extends StatelessWidget {
   const AdminPaymentsScreen({super.key});
 
-  int _sum(List<PaymentRecord> list, bool Function(PaymentRecord) test) =>
-      list.where(test).fold(0, (t, p) => t + p.amount);
+  double _sum(List<PaymentRecord> list, bool Function(PaymentRecord) test) =>
+      list.where(test).fold<double>(0, (t, p) => t + p.amount);
 
   @override
   Widget build(BuildContext context) {
@@ -22,8 +22,9 @@ class AdminPaymentsScreen extends StatelessWidget {
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final fees = _sum(all,
         (p) => p.kind == PaymentKind.bookingFee && p.status == PaymentStatus.paid);
-    final held = _sum(all, (p) => p.status == PaymentStatus.held);
-    final released = _sum(all, (p) => p.status == PaymentStatus.released);
+    final balances = _sum(all,
+        (p) => p.kind == PaymentKind.service && p.method != PayMethod.cash && p.status == PaymentStatus.paid);
+    final refunded = _sum(all, (p) => p.status == PaymentStatus.refunded);
     final cash = _sum(all, (p) => p.method == PayMethod.cash && p.status == PaymentStatus.paid);
 
     return Scaffold(
@@ -39,13 +40,13 @@ class AdminPaymentsScreen extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                   child: StatCard(
-                      label: 'Held', value: money(held), icon: Icons.lock_clock_outlined)),
+                      label: 'Balances by card', value: money(balances), icon: Icons.credit_card_rounded)),
             ]),
             const SizedBox(height: 12),
             Row(children: [
               Expanded(
                   child: StatCard(
-                      label: 'Released', value: money(released), icon: Icons.send_outlined)),
+                      label: 'Refunded', value: money(refunded), icon: Icons.undo_rounded)),
               const SizedBox(width: 12),
               Expanded(
                   child: StatCard(
@@ -75,8 +76,9 @@ class _PaymentTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = switch (p.status) {
-      PaymentStatus.paid || PaymentStatus.released => AppColors.green,
-      PaymentStatus.held || PaymentStatus.pending => AppColors.orange,
+      PaymentStatus.paid => AppColors.green,
+      PaymentStatus.pending => AppColors.orange,
+      PaymentStatus.failed => AppColors.red,
       PaymentStatus.refunded => AppColors.muted,
     };
     return AppCard(
@@ -87,14 +89,17 @@ class _PaymentTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                    '${p.kind.label}${booking == null ? '' : ' · ${booking!.serviceName}'}',
+                    [p.kind.label, if ((p.serviceName ?? booking?.serviceName) != null) p.serviceName ?? booking!.serviceName]
+                        .join(' · '),
                     style: const TextStyle(
                         fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.text)),
                 const SizedBox(height: 2),
                 Text('${p.method.label} · ${whenLabel(p.createdAt)}',
                     style: const TextStyle(fontSize: 13, color: AppColors.muted)),
-                if (booking != null)
-                  Text('Customer: ${booking!.clientName}',
+                if ((p.customerName ?? booking?.clientName) != null)
+                  Text(
+                      'Customer: ${p.customerName ?? booking!.clientName}'
+                      '${p.businessName == null ? '' : ' → ${p.businessName}'}',
                       style: const TextStyle(fontSize: 13, color: AppColors.muted)),
                 if (p.gatewayReference != null)
                   Text('Ref ${p.gatewayReference}',

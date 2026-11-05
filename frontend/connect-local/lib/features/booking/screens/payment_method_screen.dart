@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb, TargetPlatform;
+import '../../community/utils/format.dart';
 import 'package:flutter/material.dart';
 
 import '../../community/models/models.dart';
@@ -23,7 +24,7 @@ class PaymentMethodScreen extends StatefulWidget {
   const PaymentMethodScreen({super.key, this.request, this.balanceFor})
       : assert(request != null || balanceFor != null);
 
-  int get amount => request?.fee ?? balanceFor!.balance;
+  double get amount => request?.fee ?? balanceFor!.balance;
   bool get isFee => request != null;
 
   @override
@@ -43,17 +44,21 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
   static bool get _samsungPayAvailable =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
-  void _continue() {
+  Future<void> _continue() async {
     if (_selected == PayMethod.cash) {
-      // Cash: nothing to process online. It is recorded as "pending" until the
-      // provider confirms they received it.
+      // Cash: saved on the server; the balance stays "pending" until the provider confirms receiving it.
       final booking = widget.balanceFor!;
-      AppScope.read(context).payBalance(booking, method: PayMethod.cash);
       final messenger = ScaffoldMessenger.of(context);
+      final error = await AppScope.read(context).chooseCash(booking);
+      if (!mounted) return;
+      if (error != null) {
+        messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(error)));
+        return;
+      }
       Navigator.of(context)
           .popUntil((r) => r.settings.name == 'booking-detail' || r.isFirst);
       messenger.showSnackBar(
-        SnackBar(duration: const Duration(seconds: 3), content: Text('Cash selected. Hand R${booking.balance} to your provider; they will confirm they received it.')),
+        SnackBar(duration: const Duration(seconds: 3), content: Text('Cash selected. Hand ${money(booking.balance)} to your provider; they will confirm they received it.')),
       );
       return;
     }
@@ -148,7 +153,7 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
                       child: Text(widget.isFee ? 'Deposit (15%, counts toward the price)' : 'Remaining balance',
                           style: const TextStyle(fontSize: 14, color: AppColors.textDark)),
                     ),
-                    Text('R${widget.amount}',
+                    Text(money(widget.amount),
                         style: const TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.w700,
@@ -221,7 +226,7 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
                   ),
                 ),
               const SizedBox(height: 28),
-              TealButton(cash ? 'Pay R${widget.amount} in cash' : 'Pay R${widget.amount} with ${_shortName(_selected)}',
+              TealButton(cash ? 'Pay ${money(widget.amount)} in cash' : 'Pay ${money(widget.amount)} with ${_shortName(_selected)}',
                   onPressed: _continue),
               const SizedBox(height: 14),
               const Center(

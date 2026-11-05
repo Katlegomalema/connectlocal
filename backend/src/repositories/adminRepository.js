@@ -130,12 +130,13 @@ export const getPaidRevenue = async () => {
   let total = 0;
   let offset = 0;
   const batchSize = 1000;
-  while (true) {
+  for (;;) {
     // eslint-disable-next-line no-await-in-loop -- paging: each batch depends on the previous one
     const { data, error } = await supabase
       .from('payments')
       .select('amount')
       .eq('payment_status', 'paid')
+      .order('id')
       .range(offset, offset + batchSize - 1);
 
     if (error) throw error;
@@ -198,7 +199,100 @@ export const updateDispute = async (disputeId, status, resolutionNotes, adminId)
   return data;
 };
 
+// ---- platform overview (admin website) ---------------------------------------------------------------
+
+const pageOf = async (query, page, limit) => {
+  const offset = (page - 1) * limit;
+  const { data, error, count } = await query.range(offset, offset + limit - 1);
+  if (error) throw error;
+  return {
+    rows: data || [], total: count || 0, page, pages: Math.ceil((count || 0) / limit)
+  };
+};
+
+const BOOKING_NAMES = 'service:services(service_name), provider:providers(business_name), '
+  + 'customer:users!bookings_customer_id_fkey(full_name)';
+
+/** Every booking, newest first, with names and the review (the PIN hash is removed by the service). */
+export const listAllBookings = async ({ status, page, limit }) => {
+  let query = supabase
+    .from('bookings')
+    .select(`*, ${BOOKING_NAMES}, review:reviews(id, rating, review_text)`, { count: 'exact' })
+    .order('created_at', { ascending: false });
+  if (status) query = query.eq('status', status);
+  return pageOf(query, page, limit);
+};
+
+/** Every payment (fees and balances, card and cash). The raw gateway response is not sent. */
+export const listAllPayments = async ({ page, limit }) => pageOf(
+  supabase
+    .from('payments')
+    .select('id, booking_id, amount, currency, purpose, method, payment_status, gateway_provider, '
+      + `transaction_reference, refunded_amount, paid_at, created_at, booking:bookings(${BOOKING_NAMES})`, { count: 'exact' })
+    .order('created_at', { ascending: false }),
+  page,
+  limit
+);
+
+/** Every payout with the provider's bank details MASKED (the encrypted account number is never selected). */
+export const listAllPayouts = async ({ page, limit }) => pageOf(
+  supabase
+    .from('payouts')
+    .select('id, booking_id, provider_id, gross_amount, commission_rate, commission_amount, cash_collected_amount, '
+      + 'payout_amount, status, payout_reference, failure_reason, paid_at, created_at, '
+      + 'provider:providers(business_name, bank:provider_payout_details(bank_name, account_type, account_holder_name, '
+      + 'branch_code, account_last4)), '
+      + `booking:bookings(${BOOKING_NAMES})`, { count: 'exact' })
+    .order('created_at', { ascending: false }),
+  page,
+  limit
+);
+
+/** Users with their business (if any). */
+export const listUsersWithBusiness = async ({
+  role, status, query: search, page, limit
+}) => {
+  let query = supabase
+    .from('users')
+    .select('id, email, phone_number, full_name, role, is_active, email_verified, phone_verified, created_at, deleted_at, '
+      + 'business:providers!providers_user_id_fkey(id, business_name, verification_status)', { count: 'exact' })
+    .order('created_at', { ascending: false });
+  if (role) query = query.eq('role', role);
+  if (status === 'active') query = query.eq('is_active', true).is('deleted_at', null);
+  if (status === 'suspended') query = query.eq('is_active', false).is('deleted_at', null);
+  if (status === 'deactivated') query = query.not('deleted_at', 'is', null);
+  if (search) {
+    // Letters, digits, spaces, @ . - _ only (the value goes into a PostgREST filter string).
+    const safe = String(search).replace(/[^\p{L}\p{N}\s@._-]/gu, '').trim();
+    if (safe) query = query.or(`full_name.ilike.%${safe}%,email.ilike.%${safe}%`);
+  }
+  return pageOf(query, page, limit);
+};
+
+export const sumColumn = async (table, column, filters = {}) => {
+  let total = 0;
+  let offset = 0;
+  const batchSize = 1000;
+  for (;;) {
+    // Ordered by id so the pages never skip or repeat a row.
+    let query = supabase.from(table).select(column).order('id');
+    for (const [field, value] of Object.entries(filters)) query = query.eq(field, value);
+    // eslint-disable-next-line no-await-in-loop -- paging: each batch depends on the previous one
+    const { data, error } = await query.range(offset, offset + batchSize - 1);
+    if (error) throw error;
+    total += (data || []).reduce((sum, row) => sum + Number(row[column] || 0), 0);
+    if (!data || data.length < batchSize) break;
+    offset += batchSize;
+  }
+  return Math.round(total * 100) / 100;
+};
+
 export default {
+  listAllBookings,
+  listAllPayments,
+  listAllPayouts,
+  listUsersWithBusiness,
+  sumColumn,
   listProvidersByVerificationStatus,
   listProviderDocuments,
   setProviderVerificationStatus,

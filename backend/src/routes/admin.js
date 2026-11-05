@@ -127,6 +127,24 @@ router.get('/analytics', asyncHandler(async (req, res) => {
   });
 }));
 
+/** GET /api/v1/admin/bookings?status=&page=&limit=  every booking, newest first */
+router.get('/bookings', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: await adminService.listBookings(req.user, req.query) });
+}));
+
+/** GET /api/v1/admin/payments?page=&limit=  every payment (fees and balances, card and cash) */
+router.get('/payments', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: await adminService.listPayments(req.user, req.query) });
+}));
+
+/** GET /api/v1/admin/payouts?page=&limit=  every payout, bank details masked */
+router.get('/payouts', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: await adminService.listPayouts(req.user, req.query) });
+}));
+
 /**
  * GET /api/v1/admin/disputes
  * List active disputes by default, or filter by status

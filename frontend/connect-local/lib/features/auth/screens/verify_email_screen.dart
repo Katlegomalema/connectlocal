@@ -2,18 +2,15 @@ import 'package:flutter/material.dart';
 
 import '../auth_service.dart';
 
-import '../../community/state/app_state.dart';
-import '../../shared/app_config.dart';
 import '../theme/app_colors.dart';
 import 'login_screen.dart';
 
 // Screen 7 - Verify Email
 class VerifyEmailScreen extends StatelessWidget {
-  // TODO (DB): pass in the email the account was created with
-  // Figma shows "conneclocal@email.com" (looks like a typo); using connectlocal@email.com
+  /// The address the account was created with.
   final String email;
 
-  const VerifyEmailScreen({super.key, this.email = 'connectlocal@email.com'});
+  const VerifyEmailScreen({super.key, required this.email});
 
   void _message(BuildContext context, String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(text)));
@@ -64,19 +61,6 @@ class VerifyEmailScreen extends StatelessWidget {
                       style: TextStyle(fontSize: 12, color: AppColors.textDark),
                     ),
                     const SizedBox(height: 20),
-                    // Testing only (--dart-define=DEV_TOOLS=true): stands in for the
-                    // link in the email until the backend sends real emails.
-                    if (AppConfig.devTools) ...[
-                      OutlinedButton.icon(
-                        onPressed: () {
-                          AppScope.read(context).verifyEmailFor(email);
-                          _message(context, 'Email verified. You can log in now.');
-                        },
-                        icon: const Icon(Icons.mark_email_read_outlined, size: 20),
-                        label: const Text('Verify now (dev tools)'),
-                      ),
-                      const SizedBox(height: 20),
-                    ],
                     const Text("Didn't receive the email?",
                         style: TextStyle(fontSize: 12, color: AppColors.textGrey)),
                     TextButton(

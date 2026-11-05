@@ -45,21 +45,24 @@ Future<void> showStartJobPinDialog(
             FilledButton(
               onPressed: locked
                   ? null
-                  : () {
-                      final result = app.startWithPin(booking, controller.text);
-                      switch (result) {
+                  : () async {
+                      final messenger = ScaffoldMessenger.of(context);
+                      final navigator = Navigator.of(dialogContext);
+                      // Checked on the server (5 tries) when connected.
+                      final outcome = await app.startWithPin(booking, controller.text.trim());
+                      switch (outcome.result) {
                         case PinResult.ok:
-                          Navigator.pop(dialogContext);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
+                          navigator.pop();
+                          messenger.showSnackBar(const SnackBar(duration: Duration(seconds: 3),
                               content: Text('PIN verified. The job has started.')));
                         case PinResult.wrong:
-                          setState(() => error =
+                          setState(() => error = outcome.message ??
                               'Wrong PIN. ${kMaxPinAttempts - booking.pinAttempts} tries left.');
                         case PinResult.locked:
-                          setState(() => error =
+                          setState(() => error = outcome.message ??
                               'Too many wrong tries. Contact support to start this job.');
                         case PinResult.notAllowed:
-                          setState(() => error = 'This job can\u2019t be started.');
+                          setState(() => error = outcome.message ?? 'This job can\u2019t be started.');
                       }
                     },
               style: FilledButton.styleFrom(backgroundColor: AppColors.green),

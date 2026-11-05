@@ -126,7 +126,7 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
     _startTimer();
     if (resend) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('A new code has been sent.')));
+          .showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('A new code has been sent.')));
     }
     _codeFocus.requestFocus();
   }

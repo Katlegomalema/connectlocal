@@ -32,6 +32,19 @@ export const getProviderByUserId = async (userId) => {
   return data;
 };
 
+/** True when another business (not rejected) already uses this registration number. */
+export const registrationNumberInUse = async (registrationNumber, exceptProviderId = null) => {
+  let query = supabase
+    .from('providers')
+    .select('id', { count: 'exact', head: true })
+    .eq('business_registration_number', registrationNumber)
+    .neq('verification_status', 'rejected');
+  if (exceptProviderId) query = query.neq('id', exceptProviderId);
+  const { count, error } = await query;
+  if (error) throw error;
+  return (count || 0) > 0;
+};
+
 /**
  * Create new provider
  */
@@ -555,6 +568,7 @@ export const removeFavorite = async (userId, providerId) => {
 
 export default {
   getProviderById,
+  registrationNumberInUse,
   getProviderByUserId,
   getServiceCategoryById,
   getServiceCategoryByName,

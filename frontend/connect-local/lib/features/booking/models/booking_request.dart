@@ -42,5 +42,5 @@ class BookingRequest {
   int get serviceTotal => hourlyRate * hours;
 
   /// Deposit paid now.
-  int get fee => bookingFeeFor(serviceTotal);
+  double get fee => bookingFeeFor(serviceTotal);
 }

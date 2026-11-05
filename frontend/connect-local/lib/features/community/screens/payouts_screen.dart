@@ -23,7 +23,11 @@ class PayoutsScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Payouts')),
       body: SafeArea(
-        child: ListView(
+        child: RefreshIndicator(
+          onRefresh: () async {
+            await app.refreshPayouts();
+          },
+          child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
           children: [
             AppCard(
@@ -131,6 +135,7 @@ class PayoutsScreen extends StatelessWidget {
               const SizedBox(height: 12),
             ],
           ],
+          ),
         ),
       ),
     );

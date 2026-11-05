@@ -27,7 +27,7 @@ Future<bool> openDirectionsTo(
     destination = Uri.encodeComponent(address.trim());
   } else {
     ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('No location has been added yet.')));
+        .showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('No location has been added yet.')));
     return false;
   }
   final uri = Uri.parse(
@@ -38,7 +38,7 @@ Future<bool> openDirectionsTo(
   } catch (_) {}
   if (!ok && context.mounted) {
     ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('Couldn’t open maps on this device.')));
+        .showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('Couldn’t open maps on this device.')));
   }
   return ok;
 }
@@ -106,7 +106,7 @@ class LocationMap extends StatelessWidget {
             interactionOptions: InteractionOptions(
               flags: interactive ? InteractiveFlag.all : InteractiveFlag.none,
             ),
-            onTap: onTap == null ? null : (_, __) => onTap!(),
+            onTap: onTap == null ? null : (_, _) => onTap!(),
           )
         : MapOptions(
             initialCameraFit: CameraFit.bounds(
@@ -117,7 +117,7 @@ class LocationMap extends StatelessWidget {
             interactionOptions: InteractionOptions(
               flags: interactive ? InteractiveFlag.all : InteractiveFlag.none,
             ),
-            onTap: onTap == null ? null : (_, __) => onTap!(),
+            onTap: onTap == null ? null : (_, _) => onTap!(),
           );
 
     return ClipRRect(

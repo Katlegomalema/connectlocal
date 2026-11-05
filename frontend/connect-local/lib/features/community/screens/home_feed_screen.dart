@@ -135,7 +135,7 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
                     child: ListView.separated(
                       scrollDirection: Axis.horizontal,
                       itemCount: _categories.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 16),
+                      separatorBuilder: (_, _) => const SizedBox(width: 16),
                       itemBuilder: (_, i) => _CategoryTile(
                         label: _categories[i] == 'ALL' ? 'All' : _categories[i],
                         icon: _categoryIcons[_categories[i]] ?? Icons.category_rounded,

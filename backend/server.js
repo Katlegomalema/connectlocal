@@ -7,10 +7,13 @@ import 'dotenv/config';
 import app from './src/app.js';
 import logger from './src/utils/logger.js';
 import { assertCodeSecretConfigured } from './src/utils/secureCodes.js';
+import { assertEncryptionKeyConfigured } from './src/utils/encryption.js';
+import { startPayoutScheduler } from './src/services/payoutService.js';
 
 // Fail fast: PIN / OTP hashing needs the server secret.
 try {
   assertCodeSecretConfigured();
+  assertEncryptionKeyConfigured();
 } catch (err) {
   logger.fatal(err.message);
   process.exit(1);
@@ -20,6 +23,7 @@ const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
 const server = app.listen(PORT, () => {
+  startPayoutScheduler();
   logger.info({
     msg: 'Server started',
     port: PORT,

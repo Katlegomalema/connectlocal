@@ -80,7 +80,7 @@ class PhotoImage extends StatelessWidget {
         height: height,
         fit: fit,
         gaplessPlayback: true,
-        errorBuilder: (_, __, ___) => _fallback(),
+        errorBuilder: (_, _, _) => _fallback(),
       );
     }
     return Image.network(
@@ -88,7 +88,7 @@ class PhotoImage extends StatelessWidget {
       width: width,
       height: height,
       fit: fit,
-      errorBuilder: (_, __, ___) => _fallback(),
+      errorBuilder: (_, _, _) => _fallback(),
       loadingBuilder: (context, child, progress) {
         if (progress == null) return child;
         return Container(

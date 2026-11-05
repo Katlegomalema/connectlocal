@@ -4,6 +4,7 @@
  */
 
 import * as reviewRepository from '../repositories/reviewRepository.js';
+import { notifyBookingEvent } from './bookingNotifier.js';
 import { AuthorizationError, ConflictError, ValidationError } from '../utils/errors.js';
 
 const parsePagination = (pageValue, limitValue) => {
@@ -39,12 +40,27 @@ export const createReview = async (actor, { bookingId, rating, comment }) => {
     is_flagged: false
   });
   await reviewRepository.refreshProviderRating(booking.provider_id);
+  await notifyBookingEvent('reviewed', booking.id, { rating: Number(rating) });
   return review;
 };
 
+/** Public view of a review: the customer's first name only (no ids, no surname). */
+export const publicReview = (review) => ({
+  id: review.id,
+  bookingId: review.booking_id,
+  rating: review.rating,
+  comment: review.review_text,
+  customerFirstName: String(review.customer?.full_name || 'Customer').trim().split(/\s+/)[0],
+  serviceName: review.booking?.service?.service_name ?? null,
+  providerResponse: review.provider_response_text,
+  providerResponseAt: review.provider_response_at,
+  createdAt: review.created_at
+});
+
 export const getProviderReviews = async (providerId, pageValue, limitValue) => {
   const { page, limit } = parsePagination(pageValue, limitValue);
-  return reviewRepository.listVisibleReviews(providerId, page, limit);
+  const result = await reviewRepository.listVisibleReviews(providerId, page, limit);
+  return { ...result, reviews: result.reviews.map(publicReview) };
 };
 
 export const updateReview = async (actor, reviewId, { rating, comment }) => {

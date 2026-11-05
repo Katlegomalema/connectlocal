@@ -5,9 +5,13 @@
 
 import * as paymentRepository from '../repositories/paymentRepository.js';
 import * as payfast from '../integrations/payfast.js';
+import * as payoutService from './payoutService.js';
+import { notifyBookingEvent } from './bookingNotifier.js';
+import logger from '../utils/logger.js';
 import { COMMISSION_RATE, commissionFor } from '../config/business.js';
+import { checkoutToken, checkoutTokenValid } from '../utils/secureCodes.js';
 import {
-  AuthorizationError, ConflictError, ExternalServiceError, NotFoundError, ValidationError
+  AuthenticationError, AuthorizationError, ConflictError, ExternalServiceError, NotFoundError, ValidationError
 } from '../utils/errors.js';
 
 const FINAL_STATUSES = ['paid', 'refunded', 'partially_refunded'];
@@ -23,18 +27,49 @@ const assertPaymentParty = async (actor, booking) => {
 
 const toAmount = (value) => Math.round(Number(value) * 100) / 100;
 
-const getCheckoutUrls = () => {
-  const publicApiUrl = process.env.PUBLIC_API_URL || process.env.API_BASE_URL;
-  // FRONTEND_URL may list several origins (CORS); the first one is the customer app.
-  const frontendUrl = (process.env.FRONTEND_URL || '').split(',')[0].trim();
-  if (!publicApiUrl || !frontendUrl) {
-    throw new ExternalServiceError('PUBLIC_API_URL/API_BASE_URL and FRONTEND_URL are required for PayFast checkout', 'payfast');
-  }
+/** Public HTTPS address of this API (PayFast must reach notify_url). */
+const publicApiUrl = () => {
+  const url = (process.env.PUBLIC_API_URL || process.env.API_BASE_URL || '').replace(/\/$/, '');
+  if (!url) throw new ExternalServiceError('PUBLIC_API_URL is required for PayFast checkout', 'payfast');
+  return url;
+};
+
+const getCheckoutUrls = (paymentId) => {
+  const api = publicApiUrl();
   return {
-    returnUrl: process.env.PAYFAST_RETURN_URL || `${frontendUrl.replace(/\/$/, '')}/payments/return`,
-    cancelUrl: process.env.PAYFAST_CANCEL_URL || `${frontendUrl.replace(/\/$/, '')}/payments/cancel`,
-    notifyUrl: process.env.PAYFAST_NOTIFY_URL || `${publicApiUrl.replace(/\/$/, '')}/api/v1/payments/payfast/itn`
+    // Simple pages on this API ("you can go back to the app"); the app polls the payment status itself.
+    returnUrl: process.env.PAYFAST_RETURN_URL || `${api}/api/v1/payments/return?payment=${paymentId}`,
+    cancelUrl: process.env.PAYFAST_CANCEL_URL || `${api}/api/v1/payments/cancel?payment=${paymentId}`,
+    notifyUrl: process.env.PAYFAST_NOTIFY_URL || `${api}/api/v1/payments/payfast/itn`
   };
+};
+
+const CHECKOUT_LINK_SECONDS = 30 * 60;
+
+/** Link the app opens: our page that posts the signed form to PayFast. */
+const checkoutLink = (paymentId) => {
+  const expires = Math.floor(Date.now() / 1000) + CHECKOUT_LINK_SECONDS;
+  return `${publicApiUrl()}/api/v1/payments/${paymentId}/checkout?e=${expires}&t=${checkoutToken(paymentId, expires)}`;
+};
+
+/** Signed PayFast form for a pending payment. */
+const buildCheckout = async (payment, booking, purposeConfigValue) => {
+  const customer = await paymentRepository.getUserById(booking.customer_id);
+  const nameParts = (customer.full_name || '').trim().split(/\s+/);
+  const urls = getCheckoutUrls(payment.id);
+  return payfast.createPayment({
+    amount: toAmount(payment.amount),
+    return_url: urls.returnUrl,
+    cancel_url: urls.cancelUrl,
+    notify_url: urls.notifyUrl,
+    first_name: nameParts[0] || 'Customer',
+    last_name: nameParts.slice(1).join(' ') || 'ConnectLocal',
+    email: customer.email,
+    item_name: purposeConfigValue.itemName,
+    item_description: `Booking ${booking.id}`,
+    reference: payment.id,
+    booking_id: booking.id
+  });
 };
 
 const PURPOSES = {
@@ -103,29 +138,16 @@ export const createPaymentIntent = async (actor, bookingId, purpose = 'booking_f
   }
 
   try {
-    const customer = await paymentRepository.getUserById(actor.id);
-    const nameParts = (customer.full_name || '').trim().split(/\s+/);
-    const urls = getCheckoutUrls();
-    const checkout = await payfast.createPayment({
-      amount,
-      return_url: urls.returnUrl,
-      cancel_url: urls.cancelUrl,
-      notify_url: urls.notifyUrl,
-      first_name: nameParts[0] || 'Customer',
-      last_name: nameParts.slice(1).join(' ') || 'ConnectLocal',
-      email: customer.email,
-      item_name: config.itemName,
-      item_description: `Booking ${booking.id}`,
-      reference: payment.id,
-      booking_id: booking.id
-    });
-
+    const checkout = await buildCheckout(payment, booking, config);
     return {
       paymentId: payment.id,
       purpose,
       amount,
       currency: 'ZAR',
       status: payment.payment_status,
+      sandbox: payfast.isSandbox(),
+      // Open this in a browser; it posts the signed form to PayFast. Then poll GET /payments/:paymentId.
+      checkoutUrl: checkoutLink(payment.id),
       redirectUrl: checkout.url,
       fields: checkout.payload
     };
@@ -143,7 +165,7 @@ export const createPaymentIntent = async (actor, bookingId, purpose = 'booking_f
  */
 const createPayoutForBooking = async (booking, cashCollected = 0) => {
   const gross = toAmount(booking.total_amount);
-  return paymentRepository.createPayout({
+  const payout = await paymentRepository.createPayout({
     booking_id: booking.id,
     provider_id: booking.provider_id,
     gross_amount: gross,
@@ -152,6 +174,9 @@ const createPayoutForBooking = async (booking, cashCollected = 0) => {
     cash_collected_amount: toAmount(cashCollected),
     status: 'pending'
   });
+  // Automatic: paid out straight away (now that the row exists), and by the timer as a fallback.
+  setImmediate(() => payoutService.processPendingPayouts().catch((error) => logger.error({ err: error }, 'Payout run failed')));
+  return payout;
 };
 
 /** Apply a confirmed card payment to its booking. */
@@ -163,8 +188,21 @@ const applyPaidPayment = async (payment) => {
       balance_payment_method: 'card'
     });
     await createPayoutForBooking(booking, 0);
+    await notifyBookingEvent('balancePaid', booking.id, { method: 'card' });
   } else {
     await paymentRepository.updateBookingPaymentState(booking.id, {}, { booking_fee_status: 'paid' });
+    if (booking.status !== 'pending') {
+      // Paid from an old checkout tab after the booking was cancelled/declined: give the money back.
+      try {
+        // eslint-disable-next-line no-use-before-define -- defined below; only called later, at run time
+        await refundBookingFee({ ...booking, booking_fee_status: 'paid' });
+      } catch (error) {
+        logger.error({ err: error, bookingId: booking.id }, 'Late booking fee could not be refunded; needs admin follow-up');
+      }
+      return;
+    }
+    // Only now can the provider accept, so this is when they hear about the request.
+    await notifyBookingEvent('requested', booking.id);
   }
 };
 
@@ -196,6 +234,7 @@ export const recordCashBalance = async (actor, bookingId) => {
   });
   await paymentRepository.createReceipt(payment.id);
   const payout = await createPayoutForBooking(booking, amount);
+  await notifyBookingEvent('balancePaid', booking.id, { method: 'cash' });
   return { payment, payout };
 };
 
@@ -281,12 +320,29 @@ export const getReceipt = async (actor, paymentId) => {
 
 export const confirmPayment = async (actor, paymentId) => getPayment(actor, paymentId);
 
+/**
+ * For GET /payments/:id/checkout (opened in a browser, no app login): the signed PayFast form, if the link
+ * token is valid and the payment is still waiting.
+ */
+export const getCheckoutForm = async (paymentId, expires, token) => {
+  if (!checkoutTokenValid(paymentId, expires, token)) {
+    throw new AuthenticationError('This payment link has expired. Go back to the app and tap Pay again.');
+  }
+  const payment = await paymentRepository.getPaymentById(paymentId);
+  if (payment.payment_status !== 'pending') throw new ConflictError('This payment is already finished');
+  const booking = await paymentRepository.getBookingById(payment.booking_id);
+  const config = purposeConfig(payment.purpose || 'booking_fee');
+  // The link lives 30 minutes: the booking may have been cancelled or declined since.
+  if (booking.status !== config.bookingStatus) throw new ConflictError(config.wrongStatus);
+  return buildCheckout(payment, booking, config);
+};
+
 export const processPayFastItn = async (notification, sourceIp) => {
   const valid = await payfast.verifyItn(notification, sourceIp);
   if (!valid) return { accepted: false, processed: false };
 
-  const paymentId = notification.custom_str1;
-  if (!paymentId) return { accepted: true, processed: false };
+  const paymentId = notification.m_payment_id || notification.custom_str1;
+  if (typeof paymentId !== 'string' || !/^[0-9a-f-]{36}$/i.test(paymentId)) return { accepted: true, processed: false };
   const payment = await paymentRepository.getPaymentById(paymentId);
   if (FINAL_STATUSES.includes(payment.payment_status)) return { accepted: true, processed: false };
   if (payment.payment_status !== 'pending') return { accepted: true, processed: false };
@@ -344,6 +400,7 @@ export const processRefund = async (actor, paymentId) => {
 
 export default {
   createPaymentIntent,
+  getCheckoutForm,
   recordCashBalance,
   refundBookingFee,
   confirmPayment,

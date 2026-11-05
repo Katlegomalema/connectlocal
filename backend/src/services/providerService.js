@@ -41,6 +41,12 @@ const normaliseRegistrationNumber = (value) => {
   return number;
 };
 
+const assertRegistrationNumberFree = async (registrationNumber, exceptProviderId = null) => {
+  if (await providerRepository.registrationNumberInUse(registrationNumber, exceptProviderId)) {
+    throw new ConflictError('A business with this registration number has already applied');
+  }
+};
+
 const isUuid = (value) => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
 
 const resolveCategoryId = async (value) => {
@@ -170,6 +176,7 @@ export const registerProvider = async (actor, input) => {
   const categoryId = await resolveCategoryId(input.categoryId ?? input.category);
   if (!categoryId) throw new ValidationError('category or categoryId is required');
   const registrationNumber = normaliseRegistrationNumber(input.registrationNumber);
+  await assertRegistrationNumberFree(registrationNumber);
   const hasLocation = input.location || (input.latitude !== undefined && input.longitude !== undefined);
 
   return providerRepository.createProvider({
@@ -408,6 +415,7 @@ export const updateProviderProfile = async (actor, providerId, input) => {
       throw new ConflictError('The registration number of a verified business cannot be changed');
     }
     updates.business_registration_number = normaliseRegistrationNumber(input.registrationNumber);
+    await assertRegistrationNumberFree(updates.business_registration_number, providerId);
   }
   if (!Object.keys(updates).length) throw new ValidationError('No editable provider fields were supplied');
 

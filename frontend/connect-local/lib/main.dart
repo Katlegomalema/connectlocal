@@ -6,29 +6,26 @@ import 'core/api_client.dart';
 import 'core/connect_local_repository.dart';
 import 'features/auth/api_auth_service.dart';
 import 'features/auth/auth_service.dart';
-import 'features/shared/app_config.dart';
+import 'features/auth/screens/account_recovery_screens.dart';
 import 'features/auth/screens/splash_screen.dart';
 import 'features/community/state/app_state.dart';
 import 'features/community/theme/app_theme.dart';
+import 'features/shared/not_configured_screen.dart';
 
+/// The customer + provider app. Everything comes from the ConnectLocal API:
+///   `flutter run --dart-define=API_BASE_URL=https://<codespace>-3000.app.github.dev`
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Bring back everything saved on this device (applications, businesses,
-  // bookings...) so a refresh or restart does not wipe the data.
-  final appState = AppState();
-  await appState.loadSaved();
-  // Real accounts come from the backend. Device-only accounts (LocalAuthService) are a dev tool:
-  // only with --dart-define=DEV_TOOLS=true and no API_BASE_URL.
   ApiClient.instance = ApiClient();
-  await ApiClient.instance.tokens.load();
-  authService = AppConfig.devTools && !ApiClient.instance.isConfigured
-      ? LocalAuthService(appState)
-      : ApiAuthService(ApiClient.instance);
-  if (ApiClient.instance.isConfigured) {
-    // Providers, services and categories come from the server (not from this device).
-    appState.repository = ConnectLocalRepository(ApiClient.instance);
-    unawaited(appState.loadFromServer());
+  if (!ApiClient.instance.isConfigured) {
+    runApp(const NotConfiguredApp(target: 'lib/main.dart'));
+    return;
   }
+  await ApiClient.instance.tokens.load();
+  authService = ApiAuthService(ApiClient.instance);
+  final appState = AppState()..repository = ConnectLocalRepository(ApiClient.instance);
+  // Categories and providers for the first screens (the rest loads after sign-in).
+  unawaited(appState.loadFromServer());
   runApp(ConnectLocalApp(appState: appState));
 }
 
@@ -57,9 +54,17 @@ class _ConnectLocalAppState extends State<ConnectLocalApp> {
           debugShowCheckedModeBanner: false,
           theme: AppTheme.lightTheme,
           builder: _constrainToPhoneWidth,
-          home: const SplashScreen(),
+          // A password-reset link (web) opens the "new password" page; otherwise the normal start.
+          home: _recoveryToken() == null ? const SplashScreen() : CreateNewPasswordScreen(token: _recoveryToken()),
         ),
       );
+
+  /// `?type=recovery&token_hash=...` from the reset email (see SETUP.md), or null.
+  static String? _recoveryToken() {
+    final query = Uri.base.queryParameters;
+    final token = query['token_hash'];
+    return query['type'] == 'recovery' && token != null && token.isNotEmpty ? token : null;
+  }
 
   /// The whole app is designed for a phone-sized layout. On wide screens
   /// (browser / desktop) we keep it at phone width and centre it, instead of

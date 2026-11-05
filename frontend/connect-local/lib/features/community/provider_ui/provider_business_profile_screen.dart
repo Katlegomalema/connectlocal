@@ -25,7 +25,7 @@ class _ProviderBusinessProfileScreenState extends State<ProviderBusinessProfileS
   @override
   void initState() {
     super.initState();
-    // TODO (DB): load the provider's details from the backend
+    // Loaded from the server at sign-in (GET /providers/me).
     final app = AppScope.read(context);
     _name = TextEditingController(text: app.activeProvider.name);
     _description = TextEditingController(text: app.businessDescription);
@@ -41,7 +41,6 @@ class _ProviderBusinessProfileScreenState extends State<ProviderBusinessProfileS
   }
 
   Future<void> _save() async {
-    // TODO (DB): save the changes
     final app = AppScope.read(context);
     final messenger = ScaffoldMessenger.of(context);
     double? lat;
@@ -51,21 +50,21 @@ class _ProviderBusinessProfileScreenState extends State<ProviderBusinessProfileS
       final point = await geocodeAddress(_location.text);
       if (!mounted) return;
       if (point == null) {
-        messenger.showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
+        messenger.showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
             content: Text('We couldn\u2019t find that address. Add the street, suburb and city.')));
         return;
       }
       lat = point.latitude;
       lng = point.longitude;
     }
-    app.updateBusinessProfile(
+    final error = await app.updateBusinessProfile(
       name: _name.text,
       description: _description.text,
       location: _location.text,
       latitude: lat,
       longitude: lng,
     );
-    messenger.showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('Changes saved')));
+    messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(error ?? 'Changes saved')));
   }
 
   Widget _field(String label, TextEditingController controller, {int maxLines = 1}) {
@@ -117,8 +116,13 @@ class _ProviderBusinessProfileScreenState extends State<ProviderBusinessProfileS
                   size: 92,
                   photo: app.activeProvider.avatar,
                   onTap: () async {
+                    final messenger = ScaffoldMessenger.of(context);
                     final picked = await PhotoPicker.pick(context, title: 'Business picture');
-                    if (picked.isNotEmpty) app.setBusinessPhoto(picked.first);
+                    if (picked.isEmpty) return;
+                    final error = await app.setBusinessPhoto(picked.first);
+                    if (error != null) {
+                      messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(error)));
+                    }
                   },
                 ),
               ),

@@ -6,6 +6,10 @@
 import { supabaseAdmin as supabase } from '../config/supabase.js';
 import { ConflictError, NotFoundError } from '../utils/errors.js';
 
+/** Booking + what the screens show: service name, business name, customer name/phone. */
+const BOOKING_SELECT = '*, service:services(service_name), provider:providers(business_name, user_id), '
+  + 'customer:users!bookings_customer_id_fkey(full_name, phone_number), review:reviews(id, rating, review_text)';
+
 const throwDatabaseError = (error) => {
   if (error.code === '23P01' || error.code === '23505') {
     throw new ConflictError('The provider time slot is no longer available');
@@ -16,7 +20,7 @@ const throwDatabaseError = (error) => {
 export const getBookingById = async (bookingId) => {
   const { data, error } = await supabase
     .from('bookings')
-    .select('*')
+    .select(BOOKING_SELECT)
     .eq('id', bookingId)
     .maybeSingle();
 
@@ -86,12 +90,18 @@ export const getProviderByUserId = async (userId) => {
   return data;
 };
 
+/** How long an unpaid request holds its time slot (the PayFast checkout link lives 30 minutes). */
+export const UNPAID_HOLD_MINUTES = 30;
+
 export const hasBookingConflict = async (providerId, scheduledStart, scheduledEnd, excludeBookingId) => {
+  const holdSince = new Date(Date.now() - UNPAID_HOLD_MINUTES * 60000).toISOString();
   let query = supabase
     .from('bookings')
     .select('id')
     .eq('provider_id', providerId)
     .in('status', ['pending', 'accepted', 'in_progress'])
+    // A pending request only blocks the slot once its fee is paid, or while its checkout is still open.
+    .or(`status.neq.pending,booking_fee_status.eq.paid,created_at.gt.${holdSince}`)
     .lt('scheduled_start', scheduledEnd)
     .gt('scheduled_end', scheduledStart)
     .limit(1);
@@ -107,7 +117,7 @@ export const createBooking = async (bookingData) => {
   const { data, error } = await supabase
     .from('bookings')
     .insert(bookingData)
-    .select('*')
+    .select(BOOKING_SELECT)
     .single();
 
   if (error) throwDatabaseError(error);
@@ -123,7 +133,7 @@ export const updateBooking = async (bookingId, allowedStatuses, updates, expecte
   // Optimistic concurrency: only update if these columns still have the values we read.
   for (const [column, value] of Object.entries(expected)) query = query.eq(column, value);
 
-  const { data, error } = await query.select('*').maybeSingle();
+  const { data, error } = await query.select(BOOKING_SELECT).maybeSingle();
 
   if (error) throwDatabaseError(error);
   if (!data) throw new ConflictError('Booking status changed; reload and try again');
@@ -135,7 +145,7 @@ export const listBookings = async ({
 }) => {
   let query = supabase
     .from('bookings')
-    .select('*', { count: 'exact' })
+    .select(BOOKING_SELECT, { count: 'exact' })
     .order('created_at', { ascending: false });
 
   if (customerId) query = query.eq('customer_id', customerId);

@@ -103,7 +103,7 @@ export const errorHandler = (err, req, res, _next) => {
   }
 
   // Generic error response
-  res.status(err.statusCode || 500).json({
+  return res.status(err.statusCode || 500).json({
     success: false,
     code: err.code || 'INTERNAL_ERROR',
     message: process.env.NODE_ENV === 'production'

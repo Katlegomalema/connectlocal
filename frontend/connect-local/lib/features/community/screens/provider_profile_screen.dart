@@ -25,6 +25,15 @@ class _ProviderProfileScreenState extends State<ProviderProfileScreen> {
   String? _selectedServiceId;
 
   @override
+  void initState() {
+    super.initState();
+    // Reviews come from the server each time the profile is opened.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) AppScope.read(context).loadReviews(widget.providerId);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final p = app.providerById(widget.providerId);
@@ -127,7 +136,7 @@ class _ProviderProfileScreenState extends State<ProviderProfileScreen> {
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         itemCount: portfolio.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 12),
+                        separatorBuilder: (_, _) => const SizedBox(width: 12),
                         itemBuilder: (_, i) => GestureDetector(
                           onTap: () => showPhotoViewer(context, portfolio, initialIndex: i),
                           child: AvatarPlaceholder(size: 88, photo: portfolio[i]),

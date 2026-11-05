@@ -1,18 +1,13 @@
 import 'dart:async';
-import '../../../core/api_client.dart';
-import '../../../core/connect_local_repository.dart';
-import 'dart:convert';
-import 'dart:math';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../core/api_client.dart';
+import '../../../core/connect_local_repository.dart';
 import '../../shared/photo.dart';
 import '../models/models.dart';
-
-part 'app_state_storage.dart';
+import '../utils/format.dart';
 
 enum LocationStatus {
   /// Not asked yet (or switched off in Settings).
@@ -34,11 +29,16 @@ enum LocationStatus {
 /// Result of the provider entering the customer's PIN when they arrive.
 enum PinResult { ok, wrong, locked, notAllowed }
 
-/// After this many wrong PINs the job is locked (protects against guessing).
+/// After this many wrong PINs the job is locked (protects against guessing). The server enforces it.
 const int kMaxPinAttempts = 5;
 
+/// What the app shows, loaded from the ConnectLocal API. Nothing is kept on the device except the sign-in
+/// tokens (core/api_client.dart): every change goes to the server first, and the screens show what the
+/// server answered.
 class AppState extends ChangeNotifier {
-  /// Category names. Replaced with the server's list by [loadFromServer] (built-in list = offline fallback).
+  AppState();
+
+  /// Category names, replaced with the server's list by [loadFromServer].
   static List<String> categories = <String>[
     'Home Repair',
     'Cleaning',
@@ -48,30 +48,50 @@ class AppState extends ChangeNotifier {
     'Security',
   ];
 
+  /// The ConnectLocal API (set in main.dart / main_admin.dart).
+  ConnectLocalRepository? repository;
+
+  /// Last problem talking to the server (shown by screens that want to), or null.
+  String? serverError;
+
+  ConnectLocalRepository get _repo {
+    final repo = repository;
+    if (repo == null) throw const ApiException('This app is not connected to the ConnectLocal server.');
+    return repo;
+  }
+
+  /// Runs a server call and turns failures into a message for the screen (null = it worked).
+  Future<String?> _attempt(Future<void> Function(ConnectLocalRepository repo) call) async {
+    try {
+      await call(_repo);
+      return null;
+    } on ApiException catch (e) {
+      return e.message;
+    }
+  }
+
+  // ---- the signed-in person ----------------------------------------------------------------------------
+  String userId = '';
   String customerName = '';
   String customerEmail = '';
   String customerPhone = '';
 
-  /// The customer's own profile picture (null = show the default icon).
-  /// TODO (backend): upload it and keep the returned URL.
+  /// The profile picture chosen in this session (not stored on the server yet).
   PhotoRef? customerPhoto;
 
   /// The customer's verified mobile number (e.g. "+27 82 123 4567"), or null.
   String? verifiedPhone;
 
-  /// True once the customer's email address was confirmed (sign-up link or Google).
+  /// True once the customer's email address was confirmed.
   bool emailVerified = false;
 
   /// A genuine client: confirmed email AND confirmed phone number.
   bool get isClientVerified => emailVerified && verifiedPhone != null;
 
   /// True for an approved provider (Provider mode is only offered to them).
-  /// Set at sign-in from the backend, or when the admin approves your application.
   bool isProvider = false;
 
-  /// True when the person chose "I offer a service" on the Register screen.
-  /// After their first sign-in they land on the provider onboarding screen
-  /// instead of the customer Home. (Not saved: it only lives until sign-in.)
+  /// True when the person chose "I offer a service" on the Register screen (only until sign-in).
   bool providerSignupIntent = false;
 
   /// Reads the Register choice once, then forgets it.
@@ -80,25 +100,88 @@ class AppState extends ChangeNotifier {
     providerSignupIntent = false;
     return value;
   }
+
   String customerAddress = '';
   String businessDescription = '';
   String businessLocation = '';
-  /// Shown only while the signed-in person owns no business yet (never listed).
-  final ProviderModel _noProvider = ProviderModel(
-    id: 'provider-none',
-    name: 'Your business',
-    rating: 0,
-    reviews: 0,
-    distanceKm: 0,
-    services: [],
-  );
 
-  /// Every business on the platform. Starts empty: businesses appear when the
-  /// admin approves a provider's application.
-  final List<ProviderModel> providers = [];
+  /// Called after a successful sign-in with what the server returned.
+  void signIn({
+    required String name,
+    required String email,
+    required bool isProvider,
+    String userId = '',
+    bool emailVerified = true,
+    String? verifiedPhone,
+  }) {
+    this.userId = userId;
+    customerName = name.trim();
+    customerEmail = email.trim();
+    this.emailVerified = emailVerified;
+    this.verifiedPhone = verifiedPhone;
+    customerPhone = verifiedPhone ?? '';
+    this.isProvider = isProvider;
+    notifyListeners();
+  }
 
-  // ---- Customer location (real GPS distance to providers) ----------------
+  /// Forgets everything about the previous person (after logging out).
+  void signOut() {
+    _liveTimer?.cancel();
+    _liveTimer = null;
+    userId = '';
+    customerName = '';
+    customerEmail = '';
+    customerPhone = '';
+    customerAddress = '';
+    customerPhoto = null;
+    verifiedPhone = null;
+    emailVerified = false;
+    isProvider = false;
+    businessDescription = '';
+    businessLocation = '';
+    serverApplication = null;
+    _myBusinessId = null;
+    _bookings.clear();
+    _feePaid.clear();
+    _chats.clear();
+    _conversations.clear();
+    _notifications.clear();
+    _reviews.clear();
+    payments.clear();
+    payouts.clear();
+    _payoutAccount = null;
+    providerApplications.clear();
+    adminUsers.clear();
+    adminStats = const {};
+    providers.removeWhere((p) => p.id != _noProvider.id && !_listed.contains(p.id));
+    notifyListeners();
+  }
 
+  Future<String?> updateCustomerProfile({required String name, required String email}) async {
+    if (email.trim().toLowerCase() != customerEmail.trim().toLowerCase()) {
+      return 'Your email address cannot be changed here.';
+    }
+    final clean = name.trim();
+    if (clean.length < 2 || clean == customerName) return null;
+    final error = await _attempt((r) => r.updateMyName(userId, clean));
+    if (error == null) {
+      customerName = clean;
+      notifyListeners();
+    }
+    return error;
+  }
+
+  void setCustomerPhoto(PhotoRef? photo) {
+    customerPhoto = photo;
+    notifyListeners();
+  }
+
+  void setVerifiedPhone(String? number) {
+    verifiedPhone = number;
+    notifyListeners();
+  }
+
+  // ---- location (real GPS distance to providers) ------------------------------------------------------
   /// The "Location services" switch in Settings.
   bool locationEnabled = true;
   LocationStatus locationStatus = LocationStatus.unknown;
@@ -106,14 +189,10 @@ class AppState extends ChangeNotifier {
   double? userLongitude;
   bool _disposed = false;
 
-  // Saving on this device (see app_state_storage.dart).
-  Timer? _saveTimer;
-  bool _persist = false;
-
   @override
   void dispose() {
     _disposed = true;
-    _saveTimer?.cancel();
+    _liveTimer?.cancel();
     super.dispose();
   }
 
@@ -121,11 +200,6 @@ class AppState extends ChangeNotifier {
   void notifyListeners() {
     if (_disposed) return;
     super.notifyListeners();
-    if (_persist) {
-      // Save shortly after the last change (one write for a burst of changes).
-      _saveTimer?.cancel();
-      _saveTimer = Timer(const Duration(milliseconds: 400), _writeNow);
-    }
   }
 
   Future<void> setLocationEnabled(bool value) {
@@ -133,8 +207,7 @@ class AppState extends ChangeNotifier {
     return refreshLocation();
   }
 
-  /// Asks for permission (if needed), reads the phone's GPS position and
-  /// recalculates every provider's distance. Safe to call repeatedly.
+  /// Asks for permission (if needed), reads the GPS position and recalculates every provider's distance.
   Future<void> refreshLocation() async {
     if (!locationEnabled) {
       _clearLiveDistances();
@@ -160,8 +233,7 @@ class AppState extends ChangeNotifier {
         notifyListeners();
         return;
       }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.unableToDetermine) {
+      if (permission == LocationPermission.denied || permission == LocationPermission.unableToDetermine) {
         locationStatus = LocationStatus.denied;
         notifyListeners();
         return;
@@ -184,7 +256,6 @@ class AppState extends ChangeNotifier {
   }
 
   /// Opens the phone's settings so the user can fix a location problem.
-  /// (Not available in a browser; there the user uses the address-bar lock icon.)
   Future<void> openLocationHelp() async {
     try {
       if (locationStatus == LocationStatus.serviceOff) {
@@ -217,72 +288,11 @@ class AppState extends ChangeNotifier {
     userLongitude = null;
   }
 
-  final List<Booking> _bookings = [];
-  final Map<String, List<ChatMessage>> _chats = {};
-  final Map<String, List<String>> _providerNotes = {};
-  final Map<String, int> _providerUnread = {};
+  // ---- loading -----------------------------------------------------------------------------------------
+  Timer? _liveTimer;
 
-  /// Notifications of the provider whose dashboard is open.
-  List<String> get notifications =>
-      List.unmodifiable(_providerNotes[activeProvider.id] ?? const <String>[]);
-  int get unreadNotifications => _providerUnread[activeProvider.id] ?? 0;
-
-  void _notifyProvider(String providerId, String text) {
-    _providerNotes.putIfAbsent(providerId, () => []).insert(0, text);
-    _providerUnread[providerId] = (_providerUnread[providerId] ?? 0) + 1;
-  }
-
-  /// The customer's own notifications (kept separate from the provider's above).
-  final Map<String, List<String>> _customerNotes = {};
-  final Map<String, int> _customerUnread = {};
-  List<String> get customerNotifications =>
-      List.unmodifiable(_customerNotes[customerName] ?? const <String>[]);
-  int get unreadCustomerNotifications => _customerUnread[customerName] ?? 0;
-
-  /// Tell the customer called [name] something (they see it when they log in).
-  void _notifyCustomer(String name, String text) {
-    _customerNotes.putIfAbsent(name, () => []).insert(0, text);
-    _customerUnread[name] = (_customerUnread[name] ?? 0) + 1;
-  }
-
-  void markCustomerNotificationsRead() {
-    _customerUnread[customerName] = 0;
-    notifyListeners();
-  }
-
-  // TODO (DB): load provider applications from the backend.
-  final List<ProviderApplicationRecord> providerApplications = [];
-
-  List<ProviderApplicationRecord> applicationsWithStatus(ApplicationStatus status) =>
-      providerApplications.where((a) => a.status == status).toList();
-
-  /// The latest application sent by the person using the app (or null).
-  ProviderApplicationRecord? get myApplication {
-    final e = customerEmail.trim().toLowerCase();
-    for (final a in providerApplications) {
-      if (a.mine && a.email.trim().toLowerCase() == e) return a;
-    }
-    return null;
-  }
-
-  /// True if a pending or approved application already uses this registration
-  /// number (one business can't be registered twice).
-  bool registrationNumberTaken(String number) => providerApplications.any((a) =>
-      a.registrationNumber == number.trim() && a.status != ApplicationStatus.rejected);
-
-  /// Called by the "Become a Provider" form. The application shows up in the
-  /// admin's Pending list straight away.
-  // ---- server (API) ---------------------------------------------------------------------------------
-  /// Set in main.dart when the app talks to the backend. Null = device-only (dev tools).
-  ConnectLocalRepository? repository;
-
-  /// Last problem talking to the server (shown by screens that want to), or null.
-  String? serverError;
-
-  /// The signed-in provider's application on the server (null = none yet / not a provider).
-  MyApplication? serverApplication;
-
-  /// Categories, verified providers (for search), and for a provider their own business.
+  /// Categories, verified providers (search), and for a signed-in person their bookings, notifications,
+  /// chats and payments; for a provider also their own business and payouts.
   Future<void> loadFromServer() async {
     final repo = repository;
     if (repo == null) return;
@@ -290,17 +300,51 @@ class AppState extends ChangeNotifier {
       final serverCategories = await repo.categories();
       if (serverCategories.isNotEmpty) categories = [for (final c in serverCategories) c.name];
       final listed = await repo.searchProviders();
+      _listed
+        ..clear()
+        ..addAll(listed.map((p) => p.id));
       providers
-        ..removeWhere((p) => !_providerOwner.containsKey(p.id))
-        ..addAll(listed.where((p) => !providers.any((existing) => existing.id == p.id)));
+        ..removeWhere((p) => p.id != _myBusinessId)
+        ..addAll(listed.where((p) => p.id != _myBusinessId));
       serverError = null;
     } on ApiException catch (e) {
       serverError = e.message;
     }
-    await _loadMyBusiness();
+    if (customerEmail.isNotEmpty) {
+      await _loadMyBusiness();
+      await Future.wait([refreshBookings(), refreshNotifications(), refreshConversations(), refreshMyPayments()]);
+      _startLiveUpdates();
+    }
     _updateDistances();
     notifyListeners();
   }
+
+  /// While signed in: new notifications, messages and booking changes show up without a manual refresh.
+  void _startLiveUpdates() {
+    _liveTimer ??= Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (customerEmail.isEmpty) return;
+      await Future.wait([refreshNotifications(), refreshConversations(), refreshBookings()]);
+    });
+  }
+
+  // ---- providers and search ------------------------------------------------------------------------------
+  /// Shown only while the signed-in person owns no business yet (never listed).
+  final ProviderModel _noProvider = ProviderModel(
+    id: 'provider-none',
+    name: 'Your business',
+    rating: 0,
+    reviews: 0,
+    distanceKm: 0,
+    services: [],
+  );
+
+  /// Verified businesses from the search API, plus the signed-in provider's own business.
+  final List<ProviderModel> providers = [];
+  final Set<String> _listed = {};
+  String? _myBusinessId;
+
+  /// The signed-in provider's application on the server (null = none yet / not a provider).
+  MyApplication? serverApplication;
 
   /// For a signed-in provider: their application status and (once approved) their own business.
   Future<void> _loadMyBusiness() async {
@@ -315,16 +359,158 @@ class AppState extends ChangeNotifier {
       if (business == null) return;
       providers.removeWhere((p) => p.id == business.id);
       providers.add(business);
-      _providerOwner[business.id] = customerEmail.trim().toLowerCase();
+      _myBusinessId = business.id;
+      businessDescription = business.description;
+      businessLocation = business.address;
       isProvider = server.isApproved;
+      if (isProvider) {
+        await Future.wait([refreshPayouts(), loadReviews(business.id)]);
+      }
     } on ApiException catch (e) {
       // 403 = not a provider account; nothing to load.
       if (e.statusCode != 403) serverError = e.message;
     }
   }
 
-  /// Mirrors the server's application status into the local "mine" record the screens read
-  /// ([myApplication]), so a provider sees the right state on any device.
+  List<ProviderModel> search({String query = '', String category = 'ALL', bool nearestFirst = false}) {
+    final q = query.trim().toLowerCase();
+    final matches = providers.where((provider) {
+      final active = provider.activeServices;
+      final categoryMatch = category == 'ALL' ||
+          active.any((service) => service.category.toLowerCase() == category.toLowerCase());
+      final textMatch = q.isEmpty ||
+          provider.name.toLowerCase().contains(q) ||
+          active.any((service) =>
+              service.name.toLowerCase().contains(q) ||
+              service.category.toLowerCase().contains(q) ||
+              service.description.toLowerCase().contains(q));
+      // Your own business never shows up in your customer search.
+      return provider.id != _myBusinessId && categoryMatch && textMatch && active.isNotEmpty;
+    }).toList();
+    if (nearestFirst && locationStatus == LocationStatus.ready) {
+      matches.sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+    } else {
+      matches.sort((a, b) => b.rating.compareTo(a.rating));
+    }
+    return matches;
+  }
+
+  ProviderModel providerById(String id) =>
+      providers.firstWhere((provider) => provider.id == id, orElse: () => _noProvider);
+
+  ProviderModel? providerOwnedBy(String email) =>
+      email.trim().toLowerCase() == customerEmail.trim().toLowerCase() && _myBusinessId != null
+          ? providerById(_myBusinessId!)
+          : null;
+
+  ProviderModel get activeProvider => _myBusinessId == null ? _noProvider : providerById(_myBusinessId!);
+
+  /// Business name, description and address (with the map point when the address changed).
+  Future<String?> updateBusinessProfile({
+    required String name,
+    required String description,
+    required String location,
+    double? latitude,
+    double? longitude,
+  }) async {
+    final error = await _attempt((r) => r.updateMyBusiness(
+          name: name,
+          description: description,
+          address: location,
+          latitude: latitude,
+          longitude: longitude,
+        ));
+    if (error != null) return error;
+    final me = activeProvider;
+    if (latitude != null && longitude != null) {
+      me
+        ..latitude = latitude
+        ..longitude = longitude;
+      _updateDistances();
+    }
+    if (name.trim().isNotEmpty) me.name = name.trim();
+    businessDescription = description.trim();
+    businessLocation = location.trim();
+    notifyListeners();
+    return null;
+  }
+
+  /// Uploads a business photo (customers see the newest one first).
+  Future<String?> setBusinessPhoto(PhotoRef? photo) async {
+    if (photo == null) return null;
+    String? url;
+    final error = await _attempt((r) async => url = await r.addBusinessPhoto(photo));
+    if (error != null) return error;
+    activeProvider.avatar = url == null ? photo : PhotoRef(url: url, name: photo.name);
+    notifyListeners();
+    return null;
+  }
+
+  // ---- services (provider) -------------------------------------------------------------------------------
+  int bookingsThisMonth(ServiceModel service) {
+    final now = DateTime.now();
+    return _bookings
+        .where((booking) =>
+            booking.providerId == activeProvider.id &&
+            booking.serviceId == service.id &&
+            booking.dateTime.year == now.year &&
+            booking.dateTime.month == now.month)
+        .length;
+  }
+
+  /// Shows/hides a service. Returns an error message, or null.
+  Future<String?> toggleService(ServiceModel service) async {
+    final error = await _attempt((r) => r.setServiceActive(service.id, !service.active));
+    if (error != null) return error;
+    service.active = !service.active;
+    notifyListeners();
+    return null;
+  }
+
+  /// Creates ([service] null) or updates a service on the server, then reloads the business.
+  Future<String?> saveService(
+    ServiceModel? service, {
+    required String name,
+    required String category,
+    required int price,
+    required String description,
+    required List<PhotoRef> photos,
+    List<ServicePackage> packages = const [],
+    PricingType pricingType = PricingType.hourly,
+  }) async {
+    final error = await _attempt((r) => r.saveService(
+          serviceId: service?.id,
+          name: name,
+          category: category,
+          price: price,
+          description: description,
+          pricingType: pricingType,
+          packages: packages,
+          existingPackageIds: service?.serverPackageIds ?? const {},
+          photos: photos,
+        ));
+    if (error != null) return error;
+    await _loadMyBusiness();
+    notifyListeners();
+    return null;
+  }
+
+  // ---- provider applications ---------------------------------------------------------------------------
+  /// The signed-in person's own application (mine), or all applications on the admin website.
+  final List<ProviderApplicationRecord> providerApplications = [];
+
+  List<ProviderApplicationRecord> applicationsWithStatus(ApplicationStatus status) =>
+      providerApplications.where((a) => a.status == status).toList();
+
+  /// The latest application sent by the person using the app (or null).
+  ProviderApplicationRecord? get myApplication {
+    for (final a in providerApplications) {
+      if (a.mine) return a;
+    }
+    return null;
+  }
+
+  /// Mirrors the server's application status into the "mine" record the screens read ([myApplication]).
   void _syncMyApplicationRecord(MyApplication server) {
     final status = switch (server.status) {
       'approved' => ApplicationStatus.approved,
@@ -340,17 +526,19 @@ class AppState extends ChangeNotifier {
         ..rejectionReason = server.rejectionReason;
       return;
     }
-    final record = ProviderApplicationRecord(
-      id: server.providerId,
-      businessName: server.businessName,
-      email: customerEmail,
-      services: '',
-      applicantName: customerName,
-      appliedAt: DateTime.now(),
-      mine: true,
-      status: status,
-    )..rejectionReason = server.rejectionReason;
-    providerApplications.insert(0, record);
+    providerApplications.insert(
+      0,
+      ProviderApplicationRecord(
+        id: server.providerId,
+        businessName: server.businessName,
+        email: customerEmail,
+        services: '',
+        applicantName: customerName,
+        appliedAt: DateTime.now(),
+        mine: true,
+        status: status,
+      )..rejectionReason = server.rejectionReason,
+    );
   }
 
   /// Sends the "Become a provider" application. Returns an error message, or null when it was sent.
@@ -364,406 +552,66 @@ class AppState extends ChangeNotifier {
     required PhotoRef idDoc,
     required double latitude,
     required double longitude,
-    String idNumber = '',
+    String idNumber = '', // checked by the admin on the ID document; never sent or stored (privacy)
     List<PhotoRef> photos = const [],
   }) async {
-    final repo = repository;
-    if (repo != null) {
-      try {
-        serverApplication = await repo.submitApplication(
-          businessName: businessName,
-          category: category,
-          description: description,
-          address: location,
-          registrationNumber: registrationNumber,
-          latitude: latitude,
-          longitude: longitude,
-          registrationDoc: registrationDoc,
-          idDoc: idDoc,
-          photos: photos,
-        );
-      } on ApiException catch (e) {
-        return e.message;
-      }
-    }
-    // Keep a local copy so the app can show "waiting for review" straight away.
-    submitProviderApplication(
-      businessName: businessName,
-      category: category,
-      description: description,
-      location: location,
-      registrationNumber: registrationNumber,
-      registrationDoc: registrationDoc,
-      latitude: latitude,
-      longitude: longitude,
-      idNumber: repo == null ? idNumber : '', // never kept when there is a server (privacy)
-      idDoc: idDoc,
-      photos: photos,
-    );
-    return null;
-  }
-
-  /// Admin website: load applications from the server (all three tabs).
-  Future<String?> loadApplications() async {
-    final repo = repository;
-    if (repo == null) return null;
-    try {
-      final results = await Future.wait([
-        repo.applications(status: 'pending'),
-        repo.applications(status: 'verified'),
-        repo.applications(status: 'rejected'),
-      ]);
-      providerApplications
-        ..clear()
-        ..addAll(results.expand((list) => list));
-      notifyListeners();
-      return null;
-    } on ApiException catch (e) {
-      return e.message;
-    }
-  }
-
-  /// Admin approves or rejects. Returns an error message, or null when done.
-  Future<String?> decideApplication(ProviderApplicationRecord application, ApplicationStatus status,
-      {String? reason}) async {
-    final repo = repository;
-    if (repo == null) {
-      setApplicationStatus(application, status, reason: reason);
-      return null;
-    }
-    try {
-      if (status == ApplicationStatus.approved) {
-        await repo.approve(application.id);
-      } else {
-        await repo.reject(application.id, reason ?? '');
-      }
-    } on ApiException catch (e) {
-      return e.message;
-    }
-    application
-      ..status = status
-      ..rejectionReason = reason;
-    notifyListeners();
-    return null;
-  }
-
-  void submitProviderApplication({
-    required String businessName,
-    required String category,
-    required String description,
-    required String location,
-    String registrationNumber = '',
-    PhotoRef? registrationDoc,
-    double? latitude,
-    double? longitude,
-    String idNumber = '',
-    PhotoRef? idDoc,
-    List<PhotoRef> photos = const [],
-  }) {
-    providerApplications.insert(
-      0,
-      ProviderApplicationRecord(
-        id: 'application-${DateTime.now().microsecondsSinceEpoch}',
+    final error = await _attempt((r) async {
+      serverApplication = await r.submitApplication(
+        businessName: businessName,
+        category: category,
+        description: description,
+        address: location,
         registrationNumber: registrationNumber,
-        registrationDoc: registrationDoc,
-        idNumber: idNumber,
-        idDoc: idDoc,
-        applicantName: customerName,
         latitude: latitude,
         longitude: longitude,
-        businessName: businessName,
-        email: customerEmail,
-        services: category,
-        description: description,
-        location: location,
-        photos: List.unmodifiable(photos),
-        appliedAt: DateTime.now(),
-        mine: true,
-      ),
-    );
-    notifyListeners();
-  }
-
-  /// Called by Login with what the backend returned.
-  void signIn({
-    required String name,
-    required String email,
-    required bool isProvider,
-    bool emailVerified = true,
-    String? providerId,
-    String? verifiedPhone,
-  }) {
-    _syncAccount();
-    final account = accountByEmail(email);
-    this.emailVerified = account?.emailVerified ?? emailVerified;
-    customerPhone = account?.phone ?? verifiedPhone ?? '';
-    this.verifiedPhone = account?.verifiedPhone ?? verifiedPhone;
-    customerAddress = account?.address ?? '';
-    customerName = name.trim().isNotEmpty ? name.trim() : customerName;
-    customerEmail = email;
-    // Provider mode for people whose application the admin approved.
-    this.isProvider = isProvider || providerOwnedBy(email) != null;
-    final owned = providerOwnedBy(email);
-    if (owned != null) {
-      businessLocation = businessLocation.isEmpty ? customerAddress : businessLocation;
-    }
-    notifyListeners();
-  }
-
-  // ---- accounts -----------------------------------------------------------
-  final List<UserAccount> accounts = [];
-
-  UserAccount? accountByEmail(String email) {
-    final e = email.trim().toLowerCase();
-    for (final a in accounts) {
-      if (a.email == e) return a;
-    }
-    return null;
-  }
-
-  String _hash(String salt, String password) =>
-      sha256.convert(utf8.encode('$salt:$password')).toString();
-
-  /// Creates an account. Returns an error message, or null when it worked.
-  String? registerAccount({required String name, required String email, required String password}) {
-    final e = email.trim().toLowerCase();
-    if (accountByEmail(e) != null) return 'An account with this email already exists. Please log in.';
-    // Bookings and notifications are matched by name in this prototype, so
-    // two people can't share a name. TODO (backend): matched by user id.
-    final n = name.trim().toLowerCase();
-    if (accounts.any((a) => a.name.trim().toLowerCase() == n)) {
-      return 'Someone is already registered with this name. Add a middle initial or surname detail.';
-    }
-    final r = Random.secure();
-    final salt = List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
-    accounts.add(UserAccount(
-      name: name.trim(),
-      email: e,
-      salt: salt,
-      passwordHash: _hash(salt, password),
-      createdAt: DateTime.now(),
-    ));
+        registrationDoc: registrationDoc,
+        idDoc: idDoc,
+        photos: photos,
+      );
+    });
+    if (error != null) return error;
+    providerApplications.removeWhere((a) => a.mine);
+    _syncMyApplicationRecord(serverApplication!);
+    businessDescription = description;
+    businessLocation = location;
     notifyListeners();
     return null;
   }
 
-  /// Checks an email + password. Throws a readable message when wrong.
-  UserAccount authenticate(String email, String password) {
-    final account = accountByEmail(email);
-    if (account == null || account.passwordHash != _hash(account.salt, password)) {
-      throw StateError('Wrong email or password.');
-    }
-    if (account.disabled) {
-      throw StateError('This account has been disabled. Please contact support.');
-    }
-    return account;
-  }
+  // ---- bookings ----------------------------------------------------------------------------------------
+  final List<Booking> _bookings = [];
 
-  /// Marks the email as confirmed (stand-in for clicking the link in the e-mail).
-  void verifyEmailFor(String email) {
-    final account = accountByEmail(email);
-    if (account == null) return;
-    account.emailVerified = true;
-    if (customerEmail.trim().toLowerCase() == account.email) emailVerified = true;
-    notifyListeners();
-  }
+  /// Bookings whose 15% fee reached ConnectLocal (PayFast ITN). Until then the provider cannot accept.
+  final Set<String> _feePaid = {};
+  bool feePaid(Booking b) => _feePaid.contains(b.id);
 
-  void setAccountDisabled(UserAccount account, bool disabled) {
-    account.disabled = disabled;
-    notifyListeners();
-  }
+  List<Booking> get customerBookings =>
+      _bookings.where((booking) => booking.customerId == userId).toList()
+        ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
 
-  /// Copies the profile fields of the person using the app back to their account.
-  void _syncAccount() {
-    final account = accountByEmail(customerEmail);
-    if (account == null) return;
-    account.name = customerName.isEmpty ? account.name : customerName;
-    account.phone = customerPhone;
-    account.verifiedPhone = verifiedPhone;
-    account.address = customerAddress;
-    account.emailVerified = emailVerified;
-  }
-
-  /// Admin approves or rejects an application.
-  void setApplicationStatus(ProviderApplicationRecord application, ApplicationStatus status,
-      {String? reason}) {
-    application.status = status;
-    application.rejectionReason = reason;
-    if (application.mine && status == ApplicationStatus.approved &&
-        providerOwnedBy(application.email) == null) {
-      // The business goes live: a real provider owned by the applicant. It
-      // appears in other customers' search as soon as it has a service.
-      final provider = ProviderModel(
-        id: 'provider-app-${DateTime.now().microsecondsSinceEpoch}',
-        name: application.businessName,
-        rating: 0,
-        reviews: 0,
-        distanceKm: 5,
-        latitude: application.latitude,
-        longitude: application.longitude,
-        services: [],
-        verified: true, // the admin checked the registration number and documents
-      );
-      providers.add(provider);
-      _updateDistances();
-      _providerOwner[provider.id] = application.email.trim().toLowerCase();
-      businessDescription = application.description;
-      businessLocation = application.location;
-      if (customerEmail.trim().toLowerCase() == application.email.trim().toLowerCase()) {
-        isProvider = true;
-      }
-    }
-    if (application.mine) {
-      _notifyCustomer(
-        application.applicantName,
-        status == ApplicationStatus.approved
-            ? 'Great news! ${application.businessName} was approved and verified. '
-                'Open Provider mode, then add your services and prices under Services to start getting bookings.'
-            : 'Your provider application for ${application.businessName} was '
-                '${status.label.toLowerCase()}.'
-                '${reason == null || reason.isEmpty ? '' : ' Reason: $reason'} You can apply again with the right details.',
-      );
-    }
-    notifyListeners();
-  }
-  int _nextBookingNumber = 1;
-  int _nextServiceNumber = 3;
-
-  AppState();
-
-  List<ProviderModel> search({
-    String query = '',
-    String category = 'ALL',
-    bool nearestFirst = false,
-  }) {
-    final q = query.trim().toLowerCase();
-    final matches = providers.where((provider) {
-      final active = provider.activeServices;
-      final categoryMatch = category == 'ALL' ||
-          active.any((service) => service.category.toLowerCase() == category.toLowerCase());
-      final textMatch = q.isEmpty ||
-          provider.name.toLowerCase().contains(q) ||
-          active.any((service) =>
-              service.name.toLowerCase().contains(q) ||
-              service.category.toLowerCase().contains(q) ||
-              service.description.toLowerCase().contains(q));
-      // Your own business never shows up in your customer search.
-      return _providerOwner[provider.id] != customerEmail.trim().toLowerCase() &&
-          categoryMatch && textMatch && active.isNotEmpty;
-    }).toList();
-    if (nearestFirst && locationStatus == LocationStatus.ready) {
-      matches.sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
-    } else {
-      matches.sort((a, b) => b.rating.compareTo(a.rating));
-    }
-    return matches;
-  }
-
-  ProviderModel providerById(String id) => providers.firstWhere(
-        (provider) => provider.id == id,
-        orElse: () => _noProvider,
-      );
-
-  List<Booking> get customerBookings => _bookings
-      .where((booking) => booking.clientName == customerName)
-      .toList()
-    ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
-
-  /// providerId -> e-mail of the person who owns that business (created when the
-  /// admin approves their application).
-  final Map<String, String> _providerOwner = {};
-  ProviderModel? providerOwnedBy(String email) {
-    final e = email.trim().toLowerCase();
-    for (final p in providers) {
-      if (_providerOwner[p.id] == e) return p;
-    }
-    return null;
-  }
-
-  ProviderModel get activeProvider => providerOwnedBy(customerEmail) ?? _noProvider;
-  /// Every booking on the platform (admin view).
-  List<Booking> get allBookings => List.unmodifiable(
-      _bookings.toList()..sort((a, b) => b.dateTime.compareTo(a.dateTime)));
-
+  /// The provider's bookings. A request whose 15% fee is not paid yet is left out: it cannot be accepted
+  /// (and is dropped if the customer never pays).
   List<Booking> get providerBookings => _bookings
-      .where((booking) => booking.providerId == activeProvider.id)
+      .where((booking) =>
+          booking.providerId == activeProvider.id &&
+          (booking.status != BookingStatus.pending || _feePaid.contains(booking.id)))
       .toList()
     ..sort((a, b) => a.dateTime.compareTo(b.dateTime));
+
+  /// Every booking (admin website), newest first.
+  List<Booking> get allBookings =>
+      List.unmodifiable(_bookings.toList()..sort((a, b) => b.dateTime.compareTo(a.dateTime)));
 
   List<Booking> get todayBookings {
     final now = DateUtils.dateOnly(DateTime.now());
-    return providerBookings.where((booking) =>
-        DateUtils.dateOnly(booking.dateTime) == now).toList();
+    return providerBookings.where((booking) => DateUtils.dateOnly(booking.dateTime) == now).toList();
   }
 
-  int get pendingCount => providerBookings
-      .where((booking) => booking.status == BookingStatus.pending)
-      .length;
+  int get pendingCount => providerBookings.where((booking) => booking.status == BookingStatus.pending).length;
 
   int get totalEarned => providerBookings
       .where((booking) => booking.status == BookingStatus.completed)
       .fold(0, (sum, booking) => sum + booking.price);
-
-  List<ChatMessage> chatFor(String bookingId) =>
-      List.unmodifiable(_chats[bookingId] ?? const <ChatMessage>[]);
-
-  void sendMessage(String bookingId, String text, {required bool fromProvider}) {
-    final messages = _chats.putIfAbsent(bookingId, () => <ChatMessage>[]);
-    messages.add(ChatMessage(
-      text: text,
-      sentAt: DateTime.now(),
-      fromProvider: fromProvider,
-    ));
-    notifyListeners();
-  }
-
-  void updateBusinessProfile({
-    required String name,
-    required String description,
-    required String location,
-    double? latitude,
-    double? longitude,
-  }) {
-    if (latitude != null && longitude != null) {
-      activeProvider.latitude = latitude;
-      activeProvider.longitude = longitude;
-      _updateDistances();
-    }
-    if (name.trim().isNotEmpty) activeProvider.name = name.trim();
-    businessDescription = description.trim();
-    businessLocation = location.trim();
-    notifyListeners();
-  }
-
-  void markNotificationsRead() {
-    _providerUnread[activeProvider.id] = 0;
-    notifyListeners();
-  }
-
-  void setVerifiedPhone(String? number) {
-    verifiedPhone = number;
-    notifyListeners();
-  }
-
-  void setCustomerPhoto(PhotoRef? photo) {
-    customerPhoto = photo;
-    notifyListeners();
-  }
-
-  void setBusinessPhoto(PhotoRef? photo) {
-    activeProvider.avatar = photo;
-    notifyListeners();
-  }
-
-  void updateCustomerProfile({required String name, required String email}) {
-    final previousName = customerName;
-    customerName = name.trim().isEmpty ? customerName : name.trim();
-    customerEmail = email.trim().isEmpty ? customerEmail : email.trim();
-    for (final booking in _bookings) {
-      if (booking.clientName == previousName) booking.clientName = customerName;
-    }
-    notifyListeners();
-  }
 
   Booking? bookingById(String id) {
     for (final b in _bookings) {
@@ -772,440 +620,212 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  bool _isMine(Booking b) => b.clientName == customerName;
+  static BookingStatus _statusFromServer(String? status) => switch (status) {
+        'accepted' || 'in_progress' => BookingStatus.confirmed,
+        'completed' => BookingStatus.completed,
+        'rejected' => BookingStatus.declined,
+        'cancelled' => BookingStatus.cancelled,
+        _ => BookingStatus.pending,
+      };
 
-  // ---- payouts (how providers get their money) -------------------------------
-  /// providerId -> bank account the provider's earnings are paid into.
-  final Map<String, PayoutAccount> _payoutAccounts = {};
-  final List<Payout> payouts = [];
-  int _nextPayoutNumber = 1;
+  static double _num(Object? v) => switch (v) { num n => n.toDouble(), String s => double.tryParse(s) ?? 0, _ => 0 };
 
-  PayoutAccount? payoutAccountFor(String providerId) => _payoutAccounts[providerId];
-  PayoutAccount? get activePayoutAccount => _payoutAccounts[activeProvider.id];
-  bool get hasPayoutAccount => activePayoutAccount != null;
+  /// Creates or updates the app's [Booking] from a server booking (in place, so screens holding the object
+  /// see the change).
+  Booking _fromServer(Map<String, dynamic> json) {
+    final id = json['id'] as String;
+    if (json['booking_fee_status'] == 'paid') {
+      _feePaid.add(id);
+    } else if (json.containsKey('booking_fee_status')) {
+      _feePaid.remove(id);
+    }
+    final customer = (json['customer'] as Map?) ?? const {};
+    final service = (json['service'] as Map?) ?? const {};
+    final provider = (json['provider'] as Map?) ?? const {};
+    final reviewJson = json['review'];
+    final review = reviewJson is List ? (reviewJson.isEmpty ? null : reviewJson.first) : reviewJson;
+    final location = json['service_location'];
 
-  void savePayoutAccount(PayoutAccount account) {
-    _payoutAccounts[activeProvider.id] = account;
-    notifyListeners();
-  }
-
-  List<Payout> get providerPayouts => payouts
-      .where((p) => p.providerId == activeProvider.id)
-      .toList()
-    ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-
-  int payoutTotal(List<Payout> list, PayoutStatus status) =>
-      list.where((p) => p.status == status).fold(0, (t, p) => t + p.amount);
-
-  /// ConnectLocal's cut of each job, set by the admin (Earnings screen).
-  double commissionRate = kDefaultCommissionRate;
-
-  int commissionFor(int jobTotal) => (jobTotal * commissionRate).round();
-
-  void setCommissionRate(double rate) {
-    commissionRate = rate.clamp(0.0, 0.5);
-    notifyListeners();
-  }
-
-  /// Total commission ConnectLocal has earned so far.
-  int get commissionEarned => payouts.fold(0, (t, p) => t + p.commission);
-
-  void _createPayout(Booking booking) {
-    if (payouts.any((p) => p.bookingId == booking.id)) return;
-    final now = DateTime.now();
-    final id = 'PO-${_nextPayoutNumber++}';
-    final commission = commissionFor(booking.price);
-    // Online: ConnectLocal holds the whole price, so the provider gets it minus
-    // the commission. Cash: the provider already took the balance in cash, so
-    // ConnectLocal only owes them the deposit minus the commission (never below 0).
-    final cash = booking.serviceMethod == PayMethod.cash;
-    final net = cash
-        ? (booking.bookingFee > commission ? booking.bookingFee - commission : 0)
-        : booking.price - commission;
-    // Paid out automatically to the provider's saved bank account.
-    // TODO (backend): replace with a PayFast split payment / payout; the
-    // reference below then comes from PayFast.
-    payouts.add(Payout(
-      id: id,
-      providerId: booking.providerId,
-      bookingId: booking.id,
-      serviceName: booking.serviceName,
-      clientName: booking.clientName,
-      amount: net,
-      jobTotal: booking.price,
-      commission: commission,
-      createdAt: now,
-      status: PayoutStatus.paid,
-      paidAt: now,
-      reference: 'PF-$id',
-    ));
-    _notifyProvider(booking.providerId,
-        'R$net for ${booking.serviceName} was paid to your bank account '
-        '(job R${booking.price} minus ConnectLocal ${(commissionRate * 100).round()}%, ref PF-$id).');
-  }
-
-  // ---- payments (recorded so every transaction can be checked later) --------
-  final List<PaymentRecord> payments = [];
-  int _nextPaymentNumber = 1;
-
-  /// Payments the customer made (deposits and service payments).
-  List<PaymentRecord> get customerPayments {
-    final mine = _bookings.where(_isMine).map((b) => b.id).toSet();
-    return payments.where((p) => mine.contains(p.bookingId)).toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-  }
-
-  PaymentRecord _record(
-    Booking booking,
-    PaymentKind kind,
-    PayMethod method,
-    int amount, {
-    String? gatewayReference,
-    PaymentStatus status = PaymentStatus.paid,
-    bool verified = false,
-  }) {
-    final record = PaymentRecord(
-      id: 'PAY-${_nextPaymentNumber++}',
-      bookingId: booking.id,
-      kind: kind,
-      method: method,
-      amount: amount,
-      createdAt: DateTime.now(),
-      gatewayReference: gatewayReference,
-      status: status,
-      verified: verified,
-    );
-    payments.add(record);
-    return record;
-  }
-
-  void _refund(Booking booking, PaymentKind kind) {
-    for (final p in payments) {
-      if (p.bookingId == booking.id && p.kind == kind &&
-          (p.status == PaymentStatus.paid || p.status == PaymentStatus.held)) {
-        p.status = PaymentStatus.refunded;
+    Booking? existing = bookingById(id);
+    final booking = existing ??
+        Booking(
+          id: id,
+          providerId: json['provider_id'] as String,
+          serviceId: json['service_id'] as String,
+          serviceName: (service['service_name'] as String?) ?? 'Service',
+          clientName: (customer['full_name'] as String?) ?? '',
+          customerId: json['customer_id'] as String?,
+          dateTime: DateTime.tryParse((json['scheduled_start'] as String?) ?? '')?.toLocal() ?? DateTime.now(),
+          price: _num(json['total_amount']).round(),
+          hours: (json['quantity'] as num?)?.toInt() ?? 1,
+          packageName: json['package_name_at_booking'] as String?,
+          bookingFee: _num(json['booking_fee_amount']),
+          address: (json['service_address'] as String?) ?? '',
+          notes: (json['notes'] as String?) ?? '',
+        );
+    if (existing == null) {
+      booking
+        ..latitude = location is Map ? _num(location['latitude']) : null
+        ..longitude = location is Map ? _num(location['longitude']) : null;
+      _bookings.add(booking);
+    }
+    booking
+      ..status = _statusFromServer(json['status'] as String?)
+      ..clientName = (customer['full_name'] as String?) ?? booking.clientName
+      ..phone = (customer['phone_number'] as String?) ?? booking.phone
+      ..businessName = (provider['business_name'] as String?) ?? booking.businessName
+      ..balanceAmount = json['balance_amount'] == null ? booking.balanceAmount : _num(json['balance_amount'])
+      ..balancePaid = json['balance_status'] == 'paid'
+      ..feeRefunded = json['booking_fee_status'] == 'refunded'
+      ..serviceMethod = switch (json['balance_payment_method']) {
+        'card' => PayMethod.card,
+        'cash' => PayMethod.cash,
+        _ => null,
       }
+      ..pinAttempts = (json['arrival_pin_attempts'] as num?)?.toInt() ?? booking.pinAttempts
+      ..pinVerified = json['arrival_pin_verified_at'] != null;
+    if (review is Map) {
+      booking
+        ..rating = (review['rating'] as num?)?.toInt()
+        ..review = review['review_text'] as String?;
     }
+    return booking;
   }
 
-  /// A fresh 4-digit PIN that no other open booking is using.
-  String _generatePin() {
-    final random = Random.secure();
-    final inUse = _bookings
-        .where((b) => b.status == BookingStatus.confirmed)
-        .map((b) => b.completionPin)
-        .toSet();
-    String pin;
-    do {
-      pin = (1000 + random.nextInt(9000)).toString();
-    } while (inUse.contains(pin));
-    return pin;
-  }
-
-  /// Provider accepts or declines. (Completing a job goes through
-  /// [startWithPin] / [completeJob], never through here.) The customer is told what happens
-  /// next: pay the balance, fee refunded.
-  void setStatus(Booking booking, BookingStatus status) {
-    assert(status != BookingStatus.completed, 'Use completeJob to complete a job.');
-    booking.status = status;
-    if (status == BookingStatus.confirmed) {
-      // Unique proof-of-service PIN, shown to the customer only.
-      booking.completionPin ??= _generatePin();
-    }
-    if (status == BookingStatus.declined) {
-      booking.feeRefunded = true;
-      _refund(booking, PaymentKind.bookingFee);
-    }
-    {
-      final who = providerById(booking.providerId).name;
-      switch (status) {
-        case BookingStatus.confirmed:
-          _notifyCustomer(booking.clientName,
-              '$who accepted your request. Your booking is secured. Give them your service PIN when they arrive; you pay the remaining R${booking.balance} after the service.');
-        case BookingStatus.declined:
-          _notifyCustomer(booking.clientName,
-              '$who couldn’t take your booking. Your deposit of R${booking.bookingFee} will be refunded.');
-        case BookingStatus.pending:
-        case BookingStatus.completed:
-        case BookingStatus.cancelled:
-          break;
-      }
-    }
-    notifyListeners();
-  }
-
-  /// The provider arrives and enters the PIN the customer reads out. This
-  /// verifies the provider turned up for THIS booking and starts the job.
-  PinResult startWithPin(Booking booking, String pin) {
-    if (booking.status != BookingStatus.confirmed || booking.pinVerified) {
-      return PinResult.notAllowed;
-    }
-    if (booking.pinAttempts >= kMaxPinAttempts) return PinResult.locked;
-    if (pin.trim() != booking.completionPin) {
-      booking.pinAttempts++;
-      notifyListeners();
-      return booking.pinAttempts >= kMaxPinAttempts ? PinResult.locked : PinResult.wrong;
-    }
-    booking.pinVerified = true;
-    _notifyCustomer(booking.clientName,
-        '${providerById(booking.providerId).name} arrived and was verified with your PIN. The job has started.');
-    notifyListeners();
-    return PinResult.ok;
-  }
-
-  /// The provider finishes the job (only after the PIN started it). The customer
-  /// is then asked to pay the service cost.
-  void completeJob(Booking booking) {
-    if (booking.status != BookingStatus.confirmed || !booking.pinVerified) return;
-    booking.status = BookingStatus.completed;
-    _notifyCustomer(booking.clientName,
-        'Your ${booking.serviceName} job is complete. Please pay the remaining R${booking.balance} '
-        '(card, Instant EFT or cash) and leave a review.');
-    notifyListeners();
-  }
-
-  /// The provider received the cash the customer chose to pay.
-  void confirmCashReceived(Booking booking) {
-    if (booking.status != BookingStatus.completed || booking.balancePaid) return;
-    booking.balancePaid = true;
-    for (final p in payments) {
-      if (p.bookingId == booking.id &&
-          p.kind == PaymentKind.service &&
-          p.status == PaymentStatus.pending) {
-        p.status = PaymentStatus.paid;
-        p.verified = true; // confirmed by the provider
-      }
-    }
-    _createPayout(booking);
-    _notifyCustomer(booking.clientName,
-        'Your cash payment of R${booking.balance} was confirmed. Thanks! Leave a review for ${providerById(booking.providerId).name}.');
-    notifyListeners();
-  }
-
-  /// Customer cancels. Before the provider accepts, the deposit is refunded;
-  /// after acceptance it is not. Returns a message to show the customer.
-  String cancelBooking(Booking booking) {
-    final wasPending = booking.status == BookingStatus.pending;
-    booking.status = BookingStatus.cancelled;
-    if (wasPending) {
-      booking.feeRefunded = true;
-      _refund(booking, PaymentKind.bookingFee);
-    }
-    if (booking.balancePaid) _refund(booking, PaymentKind.service);
-    // A cash promise that was never handed over is simply dropped.
-    payments.removeWhere((p) =>
-        p.bookingId == booking.id &&
-        p.kind == PaymentKind.service &&
-        p.status == PaymentStatus.pending);
-    _notifyProvider(
-        booking.providerId, '${booking.clientName} cancelled ${booking.serviceName}.');
-    notifyListeners();
-    if (wasPending) return 'Booking cancelled. Your deposit of R${booking.bookingFee} will be refunded.';
-    return booking.balancePaid
-        ? 'Booking cancelled. Your R${booking.balance} payment will be refunded; the deposit is non-refundable.'
-        : 'Booking cancelled. The deposit is non-refundable once a provider has accepted.';
-  }
-
-  /// The customer pays (card via PayFast) or promises to pay cash for the
-  /// service AFTER the job is completed. [reference] is PayFast's payment id.
-  void payBalance(Booking booking, {required PayMethod method, String? reference}) {
-    booking.serviceMethod = method;
-    if (method == PayMethod.cash) {
-      // Cash is recorded as pending until the provider confirms receiving it.
-      _record(booking, PaymentKind.service, PayMethod.cash, booking.balance,
-          status: PaymentStatus.pending);
-      _notifyProvider(booking.providerId,
-          '${booking.clientName} will pay R${booking.balance} in cash for ${booking.serviceName}. Confirm when you have received it.');
-    } else {
-      // Paid online after the job: ConnectLocal now owes the provider this money.
-      booking.balancePaid = true;
-      _record(booking, PaymentKind.service, method, booking.balance,
-          gatewayReference: reference, verified: true, status: PaymentStatus.paid);
-      _createPayout(booking);
-      _notifyProvider(booking.providerId,
-          '${booking.clientName} paid R${booking.balance} online for ${booking.serviceName}.');
-    }
-    notifyListeners();
-  }
-
-  /// Saves the customer's review and updates the provider's rating.
-  void addReview(Booking booking, {required int rating, String comment = ''}) {
-    if (booking.rating != null) return;
-    booking.rating = rating;
-    booking.review = comment.trim();
-    final p = providerById(booking.providerId);
-    final total = p.rating * p.reviews + rating;
-    p.reviews += 1;
-    p.rating = double.parse((total / p.reviews).toStringAsFixed(1));
-    notifyListeners();
-  }
-
-  /// Reviews left by customers for [providerId], newest first. Only completed
-  /// (PIN-verified) jobs can be reviewed, so every review is from a real job.
-  List<Booking> reviewsFor(String providerId) => _bookings
-      .where((b) => b.providerId == providerId && b.rating != null)
-      .toList()
-    ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
-
-  int bookingsThisMonth(ServiceModel service) {
-    final now = DateTime.now();
-    return _bookings.where((booking) =>
-        booking.providerId == activeProvider.id &&
-        booking.serviceId == service.id &&
-        booking.dateTime.year == now.year &&
-        booking.dateTime.month == now.month).length;
-  }
-
-  /// Shows/hides a service. Returns an error message, or null.
-  Future<String?> toggleService(ServiceModel service) async {
+  /// Reloads the signed-in person's bookings; customers also get the PIN for accepted bookings.
+  Future<String?> refreshBookings() async {
     final repo = repository;
-    if (repo != null) {
-      try {
-        await repo.setServiceActive(service.id, !service.active);
-      } on ApiException catch (e) {
-        return e.message;
-      }
-    }
-    service.active = !service.active;
-    notifyListeners();
-    return null;
-  }
-
-  /// Creates ([service] null) or updates a service on the server, then reloads the business.
-  /// Without a server it changes the device copy. Returns an error message, or null.
-  Future<String?> saveService(
-    ServiceModel? service, {
-    required String name,
-    required String category,
-    required int price,
-    required String description,
-    required List<PhotoRef> photos,
-    List<ServicePackage> packages = const [],
-    PricingType pricingType = PricingType.hourly,
-  }) async {
-    final repo = repository;
-    if (repo == null) {
-      if (service == null) {
-        addService(name: name, category: category, price: price, description: description, photos: photos,
-            packages: packages, pricingType: pricingType);
-      } else {
-        updateService(service, name: name, category: category, price: price, description: description,
-            photos: photos, packages: packages, pricingType: pricingType);
-      }
-      return null;
-    }
+    if (repo == null || customerEmail.isEmpty) return null;
     try {
-      await repo.saveService(
-        serviceId: service?.id,
-        name: name,
-        category: category,
-        price: price,
-        description: description,
-        pricingType: pricingType,
-        packages: packages,
-        existingPackageIds: service?.serverPackageIds ?? const {},
-        photos: photos,
-      );
+      final rows = await repo.myBookings();
+      for (final row in rows) {
+        final booking = _fromServer(row);
+        final isMine = booking.customerId == userId;
+        if (isMine && row['status'] == 'accepted' && booking.completionPin == null) {
+          booking.completionPin = await repo.arrivalPin(booking.id);
+        }
+      }
+      notifyListeners();
+      return null;
     } on ApiException catch (e) {
       return e.message;
     }
-    await _loadMyBusiness();
-    notifyListeners();
-    return null;
   }
 
-  void updateService(
-    ServiceModel service, {
-    required String name,
-    required String category,
-    required int price,
-    required String description,
-    required List<PhotoRef> photos,
-    List<ServicePackage> packages = const [],
-    PricingType pricingType = PricingType.hourly,
-  }) {
-    service
-      ..name = name
-      ..category = category
-      ..price = price
-      ..description = description
-      ..photos = List.of(photos)
-      ..packages = List.of(packages)
-      ..pricingType = pricingType;
-    notifyListeners();
-  }
-
-  void addService({
-    required String name,
-    required String category,
-    required int price,
-    required String description,
-    required List<PhotoRef> photos,
-    List<ServicePackage> packages = const [],
-    PricingType pricingType = PricingType.hourly,
-  }) {
-    activeProvider.services.add(ServiceModel(
-      id: 'service-me-${_nextServiceNumber++}',
-      name: name,
-      category: category,
-      price: price,
-      description: description,
-      photos: List.of(photos),
-      packages: List.of(packages),
-      pricingType: pricingType,
-    ));
-    notifyListeners();
-  }
-
-  /// Creates the request after the customer paid the deposit.
-  /// [hourlyRate] x [hours] is the service cost (for a package: the package price x 1);
-  /// the fee is 15% of that.
-  String addCustomerBooking({
+  /// Customer: create the booking request on the server (the fee is paid right after). Returns the booking.
+  Future<Booking> createServerBooking({
     required String providerId,
     required String serviceId,
-    required String serviceName,
     required String date,
     required String time,
-    required int hourlyRate,
     required int hours,
     required String address,
+    String? packageName,
     double? latitude,
     double? longitude,
-    String? packageName,
-    String? paymentReference,
-    PayMethod feeMethod = PayMethod.card,
     String notes = '',
-  }) {
-    final dateTime = _parseDateTime(date, time);
-    final id = 'booking-demo-${_nextBookingNumber++}';
-    final provider = providerById(providerId);
-    if (address.trim().isNotEmpty) customerAddress = address.trim();
-    _bookings.add(Booking(
-      id: id,
+  }) async {
+    final service = providerById(providerId).services.where((s) => s.id == serviceId).firstOrNull;
+    final packageId = packageName == null ? null : service?.serverPackageIds[packageName];
+    final json = await _repo.createBooking(
       providerId: providerId,
       serviceId: serviceId,
-      serviceName: serviceName,
-      clientName: customerName,
-      dateTime: dateTime,
-      hours: hours,
-      packageName: packageName,
-      price: hourlyRate * hours,
-      distanceKm: provider.distanceKm,
-      phone: verifiedPhone ?? customerPhone,
-      address: customerAddress,
+      scheduledStart: _parseDateTime(date, time),
+      address: address,
+      hours: service?.pricingType == PricingType.hourly ? hours : null,
+      packageId: packageId,
+      latitude: latitude,
+      longitude: longitude,
       notes: notes,
-      // The provider confirms or declines new requests.
-      status: BookingStatus.pending,
-    )
-      ..latitude = latitude
-      ..longitude = longitude);
-    // The deposit is always paid by card (PayFast) before the request is sent.
-    final created = _bookings.last;
-    _record(created, PaymentKind.bookingFee, feeMethod, created.bookingFee,
-        gatewayReference: paymentReference, verified: true);
-    _notifyProvider(providerId, 'New booking request from $customerName for $serviceName${packageName == null ? '' : ' ($packageName)'}.');
+    );
+    if (address.trim().isNotEmpty) customerAddress = address.trim();
+    final booking = _fromServer(json);
     notifyListeners();
-    return id;
+    return booking;
+  }
+
+  /// Reloads one booking (after a payment).
+  Future<Booking?> reloadBooking(String id) async {
+    final repo = repository;
+    if (repo == null) return null;
+    final booking = _fromServer(await repo.booking(id));
+    notifyListeners();
+    return booking;
+  }
+
+  Future<String?> _bookingCall(Future<Map<String, dynamic>> Function(ConnectLocalRepository r) call) =>
+      _attempt((r) async {
+        _fromServer(await call(r));
+        notifyListeners();
+      });
+
+  /// Provider accepts (confirmed) or declines. Returns an error message, or null.
+  Future<String?> setStatus(Booking booking, BookingStatus status) => switch (status) {
+        BookingStatus.confirmed => _bookingCall((r) => r.accept(booking.id)),
+        BookingStatus.declined => _bookingCall((r) => r.decline(booking.id)),
+        _ => Future.value('That change is not allowed here.'),
+      };
+
+  /// Provider enters the PIN on arrival. The server checks it (5 tries).
+  Future<({PinResult result, String? message})> startWithPin(Booking booking, String pin) async {
+    try {
+      _fromServer(await _repo.startWithPin(booking.id, pin));
+      notifyListeners();
+      return (result: PinResult.ok, message: null);
+    } on ApiException catch (e) {
+      // Reload to show the real number of tries left.
+      try {
+        await reloadBooking(booking.id);
+      } on ApiException {
+        // keep the message below
+      }
+      final locked = e.message.contains('Too many') || e.message.contains('No tries left');
+      final wrong = e.message.startsWith('Wrong PIN');
+      return (
+        result: locked ? PinResult.locked : (wrong ? PinResult.wrong : PinResult.notAllowed),
+        message: e.message,
+      );
+    }
+  }
+
+  Future<String?> completeJob(Booking booking) => _bookingCall((r) => r.complete(booking.id));
+
+  /// Provider confirms cash received: the server records the payment, receipt and payout.
+  Future<String?> confirmCashReceived(Booking booking) => _attempt((r) async {
+        await r.confirmCash(booking.id);
+        await reloadBooking(booking.id);
+        await refreshPayouts();
+      });
+
+  /// Customer chose cash for the balance (saved on the server; the provider confirms it later).
+  Future<String?> chooseCash(Booking booking) => _bookingCall((r) => r.chooseCash(booking.id));
+
+  /// Customer cancels. Returns the message to show.
+  Future<String> cancelBooking(Booking booking) async {
+    try {
+      final json = await _repo.cancel(booking.id);
+      _fromServer(json);
+      notifyListeners();
+      return switch (json['feeRefund']) {
+        'refunded' => 'Booking cancelled. Your deposit of ${money(booking.bookingFee)} was refunded.',
+        'failed' => 'Booking cancelled. The deposit refund is being handled by ConnectLocal.',
+        'kept' => 'Booking cancelled. The deposit is non-refundable after the provider accepted.',
+        _ => 'Booking cancelled.',
+      };
+    } on ApiException catch (e) {
+      return e.message;
+    }
+  }
+
+  Future<String?> addReview(Booking booking, {required int rating, String comment = ''}) async {
+    final error = await _attempt((r) => r.review(booking.id, rating, comment));
+    if (error != null) return error;
+    booking
+      ..rating = rating
+      ..review = comment.trim();
+    notifyListeners();
+    unawaited(loadReviews(booking.providerId));
+    return null;
   }
 
   DateTime _parseDateTime(String date, String time) {
@@ -1226,11 +846,261 @@ class AppState extends ChangeNotifier {
     if (period == 'AM' && hour == 12) hour = 0;
     return DateTime(year, month, day, hour, minute);
   }
+
+  // ---- chat (one per booking) ------------------------------------------------------------------------------
+  final Map<String, List<ChatMessage>> _chats = {};
+  final Map<String, ConversationSummary> _conversations = {};
+
+  List<ChatMessage> chatFor(String bookingId) => List.unmodifiable(_chats[bookingId] ?? const <ChatMessage>[]);
+
+  /// Latest message of a booking's chat (Messages list), or null when nobody wrote yet.
+  ConversationSummary? conversationFor(String bookingId) => _conversations[bookingId];
+
+  int get unreadMessages => _conversations.values.fold(0, (t, c) => t + c.unread);
+
+  /// Loads a booking's chat (and marks what you received as read on the server).
+  Future<String?> loadChat(String bookingId) => _attempt((r) async {
+        final messages = await r.bookingMessages(bookingId);
+        final before = _chats[bookingId];
+        final changed = before == null ||
+            before.length != messages.length ||
+            (messages.isNotEmpty && before.last.id != messages.last.id);
+        _chats[bookingId] = messages;
+        final summary = _conversations[bookingId];
+        if (summary != null && summary.unread > 0) {
+          _conversations[bookingId] = ConversationSummary(
+            bookingId: bookingId,
+            lastMessage: summary.lastMessage,
+            lastAt: summary.lastAt,
+            lastMine: summary.lastMine,
+            unread: 0,
+          );
+          notifyListeners();
+        } else if (changed) {
+          notifyListeners();
+        }
+      });
+
+  /// Sends a chat message. Returns an error message, or null.
+  Future<String?> sendMessage(String bookingId, String text) => _attempt((r) async {
+        final sent = await r.sendMessage(bookingId, text);
+        (_chats[bookingId] ??= []).add(sent);
+        _conversations[bookingId] = ConversationSummary(
+          bookingId: bookingId,
+          lastMessage: sent.text,
+          lastAt: sent.sentAt,
+          lastMine: true,
+          unread: 0,
+        );
+        notifyListeners();
+      });
+
+  Future<String?> refreshConversations() async {
+    if (repository == null || customerEmail.isEmpty) return null;
+    return _attempt((r) async {
+      final list = await r.conversations();
+      _conversations
+        ..clear()
+        ..addAll({for (final c in list) c.bookingId: c});
+      notifyListeners();
+    });
+  }
+
+  // ---- notifications ---------------------------------------------------------------------------------------
+  final List<AppNotification> _notifications = [];
+
+  /// The signed-in person's notifications, newest first (the same list in customer and provider mode).
+  List<AppNotification> get notifications => List.unmodifiable(_notifications);
+  List<AppNotification> get customerNotifications => notifications;
+  int get unreadNotifications => _notifications.where((n) => !n.isRead).length;
+  int get unreadCustomerNotifications => unreadNotifications;
+
+  Future<String?> refreshNotifications() async {
+    if (repository == null || customerEmail.isEmpty) return null;
+    return _attempt((r) async {
+      final list = await r.notifications();
+      _notifications
+        ..clear()
+        ..addAll(list);
+      notifyListeners();
+    });
+  }
+
+  Future<String?> markNotificationsRead() async {
+    if (unreadNotifications == 0) return null;
+    final error = await _attempt((r) => r.markAllNotificationsRead());
+    if (error == null) {
+      for (final n in _notifications) {
+        n.isRead = true;
+      }
+      notifyListeners();
+    }
+    return error;
+  }
+
+  Future<String?> markCustomerNotificationsRead() => markNotificationsRead();
+
+  // ---- reviews -------------------------------------------------------------------------------------------
+  final Map<String, List<ReviewItem>> _reviews = {};
+
+  /// Reviews of [providerId] as last loaded (newest first). Call [loadReviews] to refresh.
+  List<ReviewItem> reviewsFor(String providerId) => List.unmodifiable(_reviews[providerId] ?? const <ReviewItem>[]);
+
+  Future<String?> loadReviews(String providerId) => _attempt((r) async {
+        _reviews[providerId] = await r.providerReviews(providerId);
+        notifyListeners();
+      });
+
+  // ---- payments ------------------------------------------------------------------------------------------
+  /// The signed-in person's payments, or every payment on the admin website.
+  final List<PaymentRecord> payments = [];
+
+  /// Payments the customer made (deposits and balances), newest first.
+  List<PaymentRecord> get customerPayments => payments.toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+  Future<String?> refreshMyPayments() async {
+    if (repository == null || customerEmail.isEmpty) return null;
+    return _attempt((r) async {
+      final list = await r.myPayments();
+      payments
+        ..clear()
+        ..addAll(list);
+      notifyListeners();
+    });
+  }
+
+  // ---- payouts (how providers get their money) -------------------------------------------------------------
+  PayoutAccount? _payoutAccount;
+  final List<Payout> payouts = [];
+
+  PayoutAccount? get activePayoutAccount => _payoutAccount;
+  bool get hasPayoutAccount => _payoutAccount != null;
+
+  /// The app only ever keeps the last 4 digits of the saved account number.
+  static PayoutAccount _accountFromServer(Map<String, dynamic> d) => PayoutAccount(
+        bank: (d['bankName'] as String?) ?? '',
+        accountType: (d['accountType'] as String?) ?? '',
+        holderName: (d['accountHolderName'] as String?) ?? '',
+        accountNumber: '•••••${d['accountLast4'] ?? ''}',
+        branchCode: (d['branchCode'] as String?) ?? '',
+      );
+
+  /// Saves bank details on the server (encrypted there). Returns an error message, or null.
+  Future<String?> savePayoutDetails(PayoutAccount account) => _attempt((r) async {
+        final saved = await r.savePayoutDetails(
+          bankName: account.bank,
+          accountType: account.accountType,
+          accountHolderName: account.holderName,
+          accountNumber: account.accountNumber,
+          branchCode: account.branchCode,
+        );
+        _payoutAccount = _accountFromServer(saved);
+        notifyListeners();
+      });
+
+  /// Provider: reloads bank details (masked) and payouts from the server.
+  Future<String?> refreshPayouts() async {
+    if (repository == null) return null;
+    final providerId = activeProvider.id;
+    return _attempt((r) async {
+      final details = await r.payoutDetails();
+      _payoutAccount = details == null ? null : _accountFromServer(details);
+      final rows = await r.myPayouts();
+      payouts
+        ..clear()
+        ..addAll([for (final row in rows) ConnectLocalRepository.payoutFromJson(row, providerId: providerId)]);
+      notifyListeners();
+    });
+  }
+
+  List<Payout> get providerPayouts =>
+      payouts.where((p) => p.providerId == activeProvider.id).toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+  double payoutTotal(List<Payout> list, PayoutStatus status) =>
+      list.where((p) => p.status == status).fold<double>(0, (t, p) => t + p.amount);
+
+  /// ConnectLocal's cut of each job (the server's value once the admin site loaded it).
+  double commissionRate = kDefaultCommissionRate;
+
+  /// ConnectLocal's commission on a job, exact to the cent (same as the backend).
+  double commissionFor(num jobTotal) => roundMoney(jobTotal * commissionRate);
+
+  /// Total commission ConnectLocal has earned so far (admin website).
+  double get commissionEarned => payouts.fold<double>(0, (t, p) => t + p.commission);
+
+  // ---- admin website ---------------------------------------------------------------------------------------
+  final List<AdminUser> adminUsers = [];
+
+  /// Platform numbers from GET /admin/analytics (totalUsers, totalProviders, totalBookings, ...).
+  Map<String, dynamic> adminStats = const {};
+
+  /// Loads everything the admin screens show. Returns an error message, or null.
+  Future<String?> loadAdminData() => _attempt((r) async {
+        final results = await Future.wait<Object>([
+          r.adminAnalytics(),
+          r.adminUsers(),
+          r.adminBookings(),
+          r.adminPayments(),
+          r.adminPayouts(),
+        ]);
+        adminStats = results[0] as Map<String, dynamic>;
+        commissionRate = _num(adminStats['commissionRate']) > 0 ? _num(adminStats['commissionRate']) : commissionRate;
+        adminUsers
+          ..clear()
+          ..addAll(results[1] as List<AdminUser>);
+        _bookings.clear();
+        for (final row in results[2] as List<Map<String, dynamic>>) {
+          _fromServer(row);
+        }
+        payments
+          ..clear()
+          ..addAll(results[3] as List<PaymentRecord>);
+        payouts
+          ..clear()
+          ..addAll(results[4] as List<Payout>);
+        notifyListeners();
+      });
+
+  /// Admin: suspend or re-activate an account. Returns an error message, or null.
+  Future<String?> setUserActive(AdminUser user, bool active) async {
+    final error = await _attempt((r) => r.setUserStatus(user.id, active ? 'active' : 'suspended'));
+    if (error == null) {
+      user.status = active ? 'active' : 'suspended';
+      notifyListeners();
+    }
+    return error;
+  }
+
+  /// Admin website: load applications from the server (all three tabs).
+  Future<String?> loadApplications() => _attempt((r) async {
+        final results = await Future.wait([
+          r.applications(status: 'pending'),
+          r.applications(status: 'verified'),
+          r.applications(status: 'rejected'),
+        ]);
+        providerApplications
+          ..clear()
+          ..addAll(results.expand((list) => list));
+        notifyListeners();
+      });
+
+  /// Admin approves or rejects. Returns an error message, or null when done.
+  Future<String?> decideApplication(ProviderApplicationRecord application, ApplicationStatus status,
+      {String? reason}) async {
+    final error = await _attempt((r) => status == ApplicationStatus.approved
+        ? r.approve(application.id)
+        : r.reject(application.id, reason ?? ''));
+    if (error != null) return error;
+    application
+      ..status = status
+      ..rejectionReason = reason;
+    notifyListeners();
+    return null;
+  }
 }
 
 class AppScope extends InheritedNotifier<AppState> {
-  const AppScope({super.key, required AppState state, required super.child})
-      : super(notifier: state);
+  const AppScope({super.key, required AppState state, required super.child}) : super(notifier: state);
 
   static AppState of(BuildContext context) {
     final scope = context.dependOnInheritedWidgetOfExactType<AppScope>();

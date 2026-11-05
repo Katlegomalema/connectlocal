@@ -122,7 +122,7 @@ class _ApplicationReviewScreenState extends State<ApplicationReviewScreen> {
     if (reason == null || !mounted) return;
     if (reason.isEmpty) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('Please give a reason')));
+          .showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('Please give a reason')));
       return;
     }
     await _decide(app, a, ApplicationStatus.rejected, reason: reason);
@@ -268,7 +268,7 @@ class _ApplicationReviewScreenState extends State<ApplicationReviewScreen> {
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         itemCount: a.photos.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 10),
+                        separatorBuilder: (_, _) => const SizedBox(width: 10),
                         itemBuilder: (_, i) => GestureDetector(
                           onTap: () => showPhotoViewer(context, a.photos, initialIndex: i),
                           child: ClipRRect(
