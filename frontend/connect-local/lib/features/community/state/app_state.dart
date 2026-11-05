@@ -4,7 +4,6 @@ import '../../../core/connect_local_repository.dart';
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -38,15 +37,38 @@ enum PinResult { ok, wrong, locked, notAllowed }
 const int kMaxPinAttempts = 5;
 
 class AppState extends ChangeNotifier {
-  /// Category names. Replaced with the server's list by [loadFromServer] (built-in list = offline fallback).
-  static List<String> categories = <String>[
-    'Home Repair',
-    'Cleaning',
-    'Beauty',
-    'Tutoring',
-    'Gardening',
-    'Security',
+  /// The ConnectLocal service categories, in the order the app shows them ("Other" always last).
+  /// The database has the same list (supabase/migrations/20261105200000_connectlocal_categories.sql).
+  static const List<String> kCategories = <String>[
+    'Beauty & Health',
+    'Healthcare',
+    'Plumbing',
+    'Cleaning Services',
+    'Education & Tutoring',
+    'Automotive Services',
+    'Electrical Services',
+    'Events & Photography',
+    'Home Maintenance',
+    'Other',
   ];
+
+  /// Category names shown in the app. [loadFromServer] replaces them with the server's active
+  /// categories, sorted in the [kCategories] order (unknown names just before "Other").
+  static List<String> categories = List.of(kCategories);
+
+  /// Sorts category names in the [kCategories] order.
+  static List<String> sortCategories(Iterable<String> names) {
+    String key(String name) => name.trim().toLowerCase();
+    final byKey = {for (final n in names) key(n): n};
+    final known = [
+      for (final c in kCategories)
+        if (byKey.containsKey(key(c))) byKey[key(c)]!,
+    ];
+    final other = known.isNotEmpty && key(known.last) == 'other' ? [known.removeLast()] : <String>[];
+    final knownKeys = {for (final c in kCategories) key(c)};
+    final unknown = [for (final n in byKey.values) if (!knownKeys.contains(key(n))) n];
+    return [...known, ...unknown, ...other];
+  }
 
   String customerName = '';
   String customerEmail = '';
@@ -288,7 +310,7 @@ class AppState extends ChangeNotifier {
     if (repo == null) return;
     try {
       final serverCategories = await repo.categories();
-      if (serverCategories.isNotEmpty) categories = [for (final c in serverCategories) c.name];
+      if (serverCategories.isNotEmpty) categories = sortCategories([for (final c in serverCategories) c.name]);
       final listed = await repo.searchProviders();
       providers
         ..removeWhere((p) => !_providerOwner.containsKey(p.id))
@@ -521,44 +543,6 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  String _hash(String salt, String password) =>
-      sha256.convert(utf8.encode('$salt:$password')).toString();
-
-  /// Creates an account. Returns an error message, or null when it worked.
-  String? registerAccount({required String name, required String email, required String password}) {
-    final e = email.trim().toLowerCase();
-    if (accountByEmail(e) != null) return 'An account with this email already exists. Please log in.';
-    // Bookings and notifications are matched by name in this prototype, so
-    // two people can't share a name. TODO (backend): matched by user id.
-    final n = name.trim().toLowerCase();
-    if (accounts.any((a) => a.name.trim().toLowerCase() == n)) {
-      return 'Someone is already registered with this name. Add a middle initial or surname detail.';
-    }
-    final r = Random.secure();
-    final salt = List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
-    accounts.add(UserAccount(
-      name: name.trim(),
-      email: e,
-      salt: salt,
-      passwordHash: _hash(salt, password),
-      createdAt: DateTime.now(),
-    ));
-    notifyListeners();
-    return null;
-  }
-
-  /// Checks an email + password. Throws a readable message when wrong.
-  UserAccount authenticate(String email, String password) {
-    final account = accountByEmail(email);
-    if (account == null || account.passwordHash != _hash(account.salt, password)) {
-      throw StateError('Wrong email or password.');
-    }
-    if (account.disabled) {
-      throw StateError('This account has been disabled. Please contact support.');
-    }
-    return account;
-  }
-
   /// Marks the email as confirmed (stand-in for clicking the link in the e-mail).
   void verifyEmailFor(String email) {
     final account = accountByEmail(email);
@@ -601,6 +585,7 @@ class AppState extends ChangeNotifier {
         distanceKm: 5,
         latitude: application.latitude,
         longitude: application.longitude,
+        address: application.location,
         services: [],
         verified: true, // the admin checked the registration number and documents
       );
@@ -732,7 +717,50 @@ class AppState extends ChangeNotifier {
     if (name.trim().isNotEmpty) activeProvider.name = name.trim();
     businessDescription = description.trim();
     businessLocation = location.trim();
+    activeProvider.address = location.trim();
     notifyListeners();
+  }
+
+  /// The provider's own working hours and slot length.
+  void setWorkingHours(WorkingHours hours) {
+    activeProvider.workingHours = hours;
+    notifyListeners();
+  }
+
+  /// True when [minutes] from [start] are free with this provider: inside working hours, and at least
+  /// [kBookingGapMinutes] away from every other booking that still holds its slot (before and after).
+  bool slotIsFree(String providerId, DateTime start, int minutes) {
+    final provider = providerById(providerId);
+    if (!provider.workingHours.fitsInDay(start, minutes)) return false;
+    // Both bookings get the gap added after them, so there are always 30 minutes between two jobs.
+    return !_bookings.any((b) =>
+        b.providerId == providerId &&
+        b.holdsSlot &&
+        timesOverlap(b.dateTime, b.blockedMinutes + kBookingGapMinutes, start, minutes + kBookingGapMinutes));
+  }
+
+  /// The slots of [day] that have not started yet, each with whether a booking of [minutes] can start
+  /// there (false = booked by someone else, or not enough time before closing).
+  List<({DateTime start, bool free})> slotsFor(String providerId, DateTime day, int minutes) {
+    final now = DateTime.now();
+    return [
+      for (final start in providerById(providerId).workingHours.slotStarts(day))
+        if (start.isAfter(now)) (start: start, free: slotIsFree(providerId, start, minutes)),
+    ];
+  }
+
+  /// Which booking options the provider offers. At least one must stay on.
+  /// Returns an error message, or null when saved.
+  String? setBookingOptions({required bool visit, required bool houseCall}) {
+    if (!visit && !houseCall) return 'Choose at least one way customers can book you.';
+    if (visit && !activeProvider.hasBusinessLocation) {
+      return 'Add your business address first, so customers can find you.';
+    }
+    activeProvider
+      ..offersVisit = visit
+      ..offersHouseCall = houseCall;
+    notifyListeners();
+    return null;
   }
 
   void markNotificationsRead() {
@@ -1169,6 +1197,8 @@ class AppState extends ChangeNotifier {
     required int hourlyRate,
     required int hours,
     required String address,
+    bool atBusiness = false,
+    int blockedMinutes = 60,
     double? latitude,
     double? longitude,
     String? packageName,
@@ -1179,7 +1209,8 @@ class AppState extends ChangeNotifier {
     final dateTime = _parseDateTime(date, time);
     final id = 'booking-demo-${_nextBookingNumber++}';
     final provider = providerById(providerId);
-    if (address.trim().isNotEmpty) customerAddress = address.trim();
+    // House call: remember the customer's address for next time. A business visit has no customer address.
+    if (!atBusiness && address.trim().isNotEmpty) customerAddress = address.trim();
     _bookings.add(Booking(
       id: id,
       providerId: providerId,
@@ -1192,18 +1223,24 @@ class AppState extends ChangeNotifier {
       price: hourlyRate * hours,
       distanceKm: provider.distanceKm,
       phone: verifiedPhone ?? customerPhone,
-      address: customerAddress,
+      atBusiness: atBusiness,
+      blockedMinutes: blockedMinutes,
+      address: atBusiness ? '' : customerAddress,
       notes: notes,
       // The provider confirms or declines new requests.
       status: BookingStatus.pending,
     )
-      ..latitude = latitude
-      ..longitude = longitude);
+      ..latitude = atBusiness ? null : latitude
+      ..longitude = atBusiness ? null : longitude);
     // The deposit is always paid by card (PayFast) before the request is sent.
     final created = _bookings.last;
     _record(created, PaymentKind.bookingFee, feeMethod, created.bookingFee,
         gatewayReference: paymentReference, verified: true);
-    _notifyProvider(providerId, 'New booking request from $customerName for $serviceName${packageName == null ? '' : ' ($packageName)'}.');
+    _notifyProvider(
+        providerId,
+        '${atBusiness ? 'New booking' : 'New house call request'} from $customerName for $serviceName'
+        '${packageName == null ? '' : ' ($packageName)'}'
+        '${atBusiness ? ' (they will visit your business).' : '.'}');
     notifyListeners();
     return id;
   }

@@ -82,6 +82,14 @@ class ConnectLocalRepository {
       distanceIsLive: json['distance_km'] != null,
       latitude: _toDouble(json['latitude']),
       longitude: _toDouble(json['longitude']),
+      address: [json['street_address'], json['suburb'], json['city']]
+          .whereType<String>()
+          .map((part) => part.trim())
+          .where((part) => part.isNotEmpty)
+          .join(', '),
+      // Booking options. Until the API sends these, every provider does house calls only.
+      offersVisit: json['offers_visit'] == true,
+      offersHouseCall: json['offers_house_call'] != false,
       verified: json['verified'] == true || json['verification_status'] == 'verified',
       services: [
         for (final s in (json['services'] as List? ?? const []))

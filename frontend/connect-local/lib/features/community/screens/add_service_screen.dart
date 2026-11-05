@@ -20,8 +20,8 @@ class AddServiceScreen extends StatefulWidget {
 class _AddServiceScreenState extends State<AddServiceScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameCtrl;
-  // Each pricing type keeps its own price and extra services, so what is typed
-  // under "Per hour" never shows up under "Fixed price" (and vice versa).
+  // Each pricing type keeps its own price, so what is typed under "Per hour" never shows up under
+  // "Fixed price" (and vice versa).
   final TextEditingController _hourlyPrice = TextEditingController();
   final TextEditingController _fixedPrice = TextEditingController();
   TextEditingController get _priceCtrl =>
@@ -36,12 +36,6 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
   bool get _usePackages => _type == PricingType.packages;
   final List<_PackageRow> _packageRows = [];
 
-  /// Extra services added in the same form (per hour / fixed price), so a
-  /// provider can list several services in one go.
-  final List<_PackageRow> _extraHourly = [];
-  final List<_PackageRow> _extraFixed = [];
-  List<_PackageRow> get _extraRows =>
-      _type == PricingType.fixed ? _extraFixed : _extraHourly;
 
   bool get _editing => widget.service != null;
 
@@ -72,9 +66,6 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
     _fixedPrice.dispose();
     _descCtrl.dispose();
     for (final r in _packageRows) {
-      r.dispose();
-    }
-    for (final r in [..._extraHourly, ..._extraFixed]) {
       r.dispose();
     }
     super.dispose();
@@ -159,35 +150,15 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
           return;
         }
         packages.add(ServicePackage(
-            name: r.name.text.trim(), price: price, description: r.description.text.trim()));
+            name: r.name.text.trim(),
+            price: price,
+            description: r.description.text.trim()));
       }
       if (packages.isEmpty) {
         messenger.showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('Add at least one package')));
         return;
       }
     }
-    // Extra services from the same form (per hour / fixed price only).
-    final extras = <_PackageRow>[];
-    if (!_usePackages && !_editing) {
-      final business = app.activeProvider.name.trim().toLowerCase();
-      for (final r in _extraRows) {
-        final n = r.name.text.trim();
-        final p = r.price;
-        if (n.isEmpty && p == null) continue;
-        if (n.isEmpty || p == null || p <= 0) {
-          messenger.showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
-              content: Text('Each extra service needs a name and a price')));
-          return;
-        }
-        if (n.toLowerCase() == business) {
-          messenger.showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
-              content: Text('Use the name of the service, not your business name')));
-          return;
-        }
-        extras.add(r);
-      }
-    }
-
     // With packages the service price is the cheapest package ("From R...").
     final price = _usePackages
         ? packages.map((k) => k.price).reduce((a, b) => a < b ? a : b)
@@ -195,46 +166,26 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
 
     // Saved on the server when connected (the list reloads from there), else on this device.
     setState(() => _saving = true);
-    final errors = <String>[];
-    Future<void> save(ServiceModel? service, String name, int price, String description,
-        List<ServicePackage> pkgs) async {
-      final error = await app.saveService(
-        service,
-        name: name,
-        category: _category!,
-        price: price,
-        description: description,
-        photos: _photos,
-        packages: pkgs,
-        pricingType: _type,
-      );
-      if (error != null) errors.add(error);
-    }
-
-    if (_editing) {
-      await save(widget.service!, _nameCtrl.text.trim(), price, _descCtrl.text.trim(), packages);
-    } else {
-      await save(null, _nameCtrl.text.trim(), price, _descCtrl.text.trim(), packages);
-      for (final r in extras) {
-        if (errors.isNotEmpty) break;
-        final d = r.description.text.trim();
-        await save(null, r.name.text.trim(), r.price!, d.isEmpty ? _descCtrl.text.trim() : d, const []);
-      }
-    }
+    final error = await app.saveService(
+      widget.service,
+      name: _nameCtrl.text.trim(),
+      category: _category!,
+      price: price,
+      description: _descCtrl.text.trim(),
+      photos: _photos,
+      packages: packages,
+      pricingType: _type,
+    );
     if (!mounted) return;
     setState(() => _saving = false);
-    if (errors.isNotEmpty) {
-      messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 4), content: Text(errors.first)));
+    if (error != null) {
+      messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 4), content: Text(error)));
       return;
     }
     final navigator = Navigator.of(context);
     navigator.pop();
     messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), 
-      content: Text(_editing
-          ? 'Service updated'
-          : extras.isEmpty
-              ? 'Service published'
-              : '${extras.length + 1} services published'),
+      content: Text(_editing ? 'Service updated' : 'Service published'),
       action: _editing
           ? null
           : SnackBarAction(
@@ -263,30 +214,22 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                 const Padding(
                   padding: EdgeInsets.only(top: 12),
                   child: Text(
-                    'Add each service you offer on its own, with its own price. For example '
-                    '"Security audit", "Alarm system check" and "Electric fence inspection" '
-                    'are three separate services. Your business name and description come '
-                    'from your application and are shown on your profile.',
+                    'Add one service at a time, each with its own price. For example a barber adds '
+                    '"Men\u2019s haircut" and "Beard trim" as two services. After publishing you can '
+                    'tap "Add another". Your business name and description come from your application.',
                     style: TextStyle(fontSize: 13, height: 1.4, color: AppColors.muted),
                   ),
                 ),
-                if (!_editing && !_usePackages)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 14),
-                    child: Text('Service 1',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.text)),
-                  ),
                 _label('Service Name', required: true),
                 TextFormField(
                   controller: _nameCtrl,
                   style: const TextStyle(fontSize: 14),
-                  decoration: _decoration('e.g. Security audit'),
+                  decoration: _decoration('e.g. Men\u2019s haircut, Geyser repair, Maths lesson'),
                   validator: (v) {
                     if (v == null || v.trim().isEmpty) return 'Required';
                     final business = AppScope.read(context).activeProvider.name;
                     if (v.trim().toLowerCase() == business.trim().toLowerCase()) {
-                      return 'Use the name of the service (e.g. "Security audit"), not your business name';
+                      return 'Use the name of the service (e.g. "Men\u2019s haircut"), not your business name';
                     }
                     return null;
                   },
@@ -321,12 +264,12 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                   child: Text(
                     switch (_type) {
                       PricingType.hourly =>
-                        'Best for work that takes a variable time, e.g. plumbing, tutoring.',
+                        'For work that takes a variable time, e.g. tutoring or plumbing repairs. '
+                        'The customer chooses how many hours.',
                       PricingType.fixed =>
-                        'One price for the service, e.g. a haircut R150 or a manicure R200. '
-                        'Add each treatment as its own service with "Add another service".',
+                        'One price for the whole job, e.g. a haircut R80 or a car wash R150.',
                       PricingType.packages =>
-                        'Fixed-price options the customer chooses from, e.g. 1 or 3 CCTV cameras.',
+                        'A few options the customer chooses from, e.g. "Cut R80" or "Cut + beard R120".',
                     },
                     style: const TextStyle(fontSize: 12, height: 1.4, color: AppColors.muted),
                   ),
@@ -346,76 +289,11 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                       return null;
                     },
                   ),
-                  if (!_editing) ...[
-                    for (var i = 0; i < _extraRows.length; i++)
-                      Container(
-                        margin: const EdgeInsets.only(top: 14),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: AppColors.hairline),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Column(
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text('Service ${i + 2}',
-                                      style: const TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w700,
-                                          color: AppColors.text)),
-                                ),
-                                IconButton(
-                                  visualDensity: VisualDensity.compact,
-                                  tooltip: 'Remove',
-                                  icon: const Icon(Icons.delete_outline, size: 20),
-                                  onPressed: () => setState(() {
-                                    _extraRows.removeAt(i).dispose();
-                                  }),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            TextField(
-                              controller: _extraRows[i].name,
-                              style: const TextStyle(fontSize: 14),
-                              decoration: _decoration('Service name, e.g. Alarm system check'),
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: _extraRows[i].priceText,
-                              keyboardType: TextInputType.number,
-                              style: const TextStyle(fontSize: 14),
-                              decoration: _decoration(
-                                  _type == PricingType.fixed ? 'Price' : 'Price per hour',
-                                  prefixText: 'R '),
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: _extraRows[i].description,
-                              style: const TextStyle(fontSize: 14),
-                              decoration: _decoration(
-                                  'What it includes (optional, uses the description below if empty)'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    if (_extraRows.length < 9)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          onPressed: () => setState(() => _extraRows.add(_PackageRow('', '', ''))),
-                          icon: const Icon(Icons.add),
-                          label: const Text('Add another service'),
-                        ),
-                      ),
-                  ],
                 ] else ...[
                   const Padding(
                     padding: EdgeInsets.only(top: 10),
                     child: Text(
-                      'Example: "Install 1 CCTV camera" R1 500, "Install 3 CCTV cameras" R3 800.',
+                      'Example: "Cut" R80, "Cut + beard" R120. Each package has its own price.',
                       style: TextStyle(fontSize: 13, height: 1.4, color: AppColors.muted),
                     ),
                   ),
@@ -453,7 +331,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                           TextField(
                             controller: _packageRows[i].name,
                             style: const TextStyle(fontSize: 14),
-                            decoration: _decoration('Name, e.g. Install 3 CCTV cameras'),
+                            decoration: _decoration('Name, e.g. Cut + beard'),
                           ),
                           const SizedBox(height: 10),
                           TextField(

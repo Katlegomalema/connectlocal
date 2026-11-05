@@ -1,6 +1,9 @@
 import 'package:flutter/foundation.dart';
 
 import '../../shared/photo.dart';
+import 'schedule.dart';
+
+export 'schedule.dart';
 
 /// The deposit the customer pays when sending a request: 15% of the
 /// service cost. It is separate from what the provider earns.
@@ -214,6 +217,17 @@ class ProviderModel {
   /// address the provider entered.
   double? latitude;
   double? longitude;
+
+  /// The business address as the provider typed it (street, suburb, city).
+  String address;
+
+  /// Booking options the provider offers (chosen in their business profile):
+  /// customers come to the business / salon, and/or the provider comes to the customer.
+  bool offersVisit;
+  bool offersHouseCall;
+
+  /// Days and hours the provider works, and how long one booking slot is.
+  WorkingHours workingHours;
   final List<ServiceModel> services;
 
   /// True once the admin has checked the business's registration number and
@@ -229,9 +243,19 @@ class ProviderModel {
     required this.services,
     this.latitude,
     this.longitude,
+    this.address = '',
+    this.offersVisit = false,
+    this.offersHouseCall = true,
+    this.workingHours = WorkingHours.standard,
     this.distanceIsLive = false,
     this.verified = false,
   });
+
+  /// True when the business has a place customers can find (a map pin or an address).
+  bool get hasBusinessLocation => (latitude != null && longitude != null) || address.trim().isNotEmpty;
+
+  /// "Visit the business" is only offered when the provider allows it AND the place can be found.
+  bool get canBeVisited => offersVisit && hasBusinessLocation;
 
   /// The picture to show for this provider in lists: their own profile
   /// picture, else the first photo of any of their active services.
@@ -301,6 +325,16 @@ class Booking {
 
   final double distanceKm;
   final String phone;
+
+  /// True = the customer visits the business / salon. False = house call: the provider comes to
+  /// [address] (the customer's home or current location).
+  final bool atBusiness;
+
+  /// How long this booking holds the provider's time from [dateTime]: one slot, or the hours booked
+  /// for a per-hour service. Other customers cannot book an overlapping slot while it is active.
+  final int blockedMinutes;
+
+  /// House call: where the provider must go. Empty for a business visit.
   final String address;
   final String notes;
   BookingStatus status;
@@ -324,10 +358,18 @@ class Booking {
     this.completionPin,
     this.distanceKm = 0,
     this.phone = '',
+    this.atBusiness = false,
+    this.blockedMinutes = 60,
     this.address = '',
     this.notes = '',
     this.status = BookingStatus.pending,
   }) : bookingFee = bookingFee ?? bookingFeeFor(price);
+
+  /// Still holding the provider's time slot (requested or accepted, not finished / declined / cancelled).
+  bool get holdsSlot => status == BookingStatus.pending || status == BookingStatus.confirmed;
+
+  /// "Visit the business" or "House call" (shown on booking cards and details).
+  String get locationTypeLabel => atBusiness ? 'Visit the business' : 'House call';
 
   /// What the customer pays in total. The 15% deposit counts
   /// toward the price, so the total is just [price].

@@ -7,6 +7,9 @@ const _teal = Color(0xFF1F5FA8);
 const _red = Color(0xFFE5251F);
 const _hairline = Color(0xFFE5E7EB);
 
+/// The blue dot = the customer's position (used by the map and by CustomerLocationMap).
+const kCustomerDotBlue = Color(0xFF2563EB);
+
 /// Opens the place in the phone's maps app (or the browser) with directions.
 Future<bool> openDirections(BuildContext context, double lat, double lng) =>
     openDirectionsTo(context, lat: lat, lng: lng);
@@ -144,7 +147,7 @@ class LocationMap extends StatelessWidget {
                     height: 22,
                     child: Container(
                       decoration: BoxDecoration(
-                        color: const Color(0xFF2563EB),
+                        color: kCustomerDotBlue,
                         shape: BoxShape.circle,
                         border: Border.all(color: Colors.white, width: 3),
                         boxShadow: const [

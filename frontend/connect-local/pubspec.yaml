@@ -39,9 +39,6 @@ dependencies:
   geolocator: ^14.0.2
   http: ^1.2.2
 
-  # Password hashing for the local accounts.
-  crypto: ^3.0.3
-
   # Saves the app's data on this device so it survives a refresh or restart
   # (stand-in for the database until the backend exists).
   shared_preferences: ^2.3.2

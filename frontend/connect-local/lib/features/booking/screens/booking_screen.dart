@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../../community/screens/verify_phone_screen.dart';
 import '../../shared/geocoding.dart';
+import '../../shared/booking_maps.dart';
 import '../../shared/map_picker_screen.dart';
 import '../../community/state/app_state.dart';
-import '../../community/models/models.dart' show kBookingFeeRate, bookingFeeFor, ServicePackage;
+import '../../community/models/models.dart'
+    show kBookingFeeRate, bookingFeeFor, clockLabel, ProviderModel, ServicePackage;
 import '../models/booking_request.dart';
 import '../theme/app_colors.dart';
 import '../widgets/common.dart';
@@ -21,16 +23,16 @@ class BookingScreen extends StatefulWidget {
   /// Fixed-price options of the service (empty = priced per hour).
   final List<ServicePackage> packages;
 
-  /// One fixed price for the whole service (e.g. a haircut): no duration.
+  /// One fixed price for the whole service (e.g. a haircut).
   final bool fixedPrice;
 
   const BookingScreen({
     super.key,
-    this.providerId = 'provider-1',
-    this.providerName = 'Bobs Plumbing',
-    this.serviceId = 'service-1',
-    this.serviceName = 'Pipe repair',
-    this.hourlyRate = 350,
+    required this.providerId,
+    required this.providerName,
+    required this.serviceId,
+    required this.serviceName,
+    required this.hourlyRate,
     this.packages = const [],
     this.fixedPrice = false,
   });
@@ -46,7 +48,9 @@ class _BookingScreenState extends State<BookingScreen> {
   ];
   final DateTime _today = DateUtils.dateOnly(DateTime.now());
   late DateTime _date = _today;
-  String? _time; // null until the user picks a slot
+
+  /// The booked time slot (start). Null until the customer picks a free slot.
+  DateTime? _slot;
   final _notes = TextEditingController();
   final _address = TextEditingController();
   bool _addressReady = false;
@@ -62,23 +66,79 @@ class _BookingScreenState extends State<BookingScreen> {
     setState(() {
       _lat = picked.latitude;
       _lng = picked.longitude;
+      _fromGps = false;
       if (picked.label != null && picked.label!.isNotEmpty) _address.text = picked.label!;
     });
   }
+  bool _locating = false;
+
+  /// True when [_lat]/[_lng] came from the phone's GPS (false = a spot the customer pinned on the map).
+  bool _fromGps = false;
+
+  /// House call: find the customer's current location (GPS) and fill in the address.
+  /// [auto] = started by choosing "Request a house call" (a softer message if it fails).
+  Future<void> _useMyLocation({bool auto = false}) async {
+    if (_locating) return;
+    setState(() => _locating = true);
+    final here = await currentLocation();
+    if (!mounted) return;
+    setState(() => _locating = false);
+    if (here == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          duration: const Duration(seconds: 4),
+          content: Text(auto
+              ? 'We couldn’t find your current location. Type your address or choose it on the map.'
+              : 'Couldn’t get your location. Allow location access or type the address.')));
+      return;
+    }
+    setState(() {
+      _lat = here.latitude;
+      _lng = here.longitude;
+      _fromGps = true;
+      _address.text = here.label ?? 'My current location';
+    });
+  }
+
+  /// The customer chose (or was given) the house call option: show where they are right away.
+  void _selectHouseCall() {
+    setState(() => _atBusiness = false);
+    if (_lat == null) _useMyLocation(auto: true);
+  }
+
   int _hours = 1;
   int _package = 0;
+
+  /// How the customer gets the service: true = visit the business / salon, false = house call,
+  /// null = not chosen yet (only when the provider offers both).
+  bool? _atBusiness;
 
   bool get _hasPackages => widget.packages.isNotEmpty;
   bool get _fixed => widget.fixedPrice && !_hasPackages;
   ServicePackage? get _chosenPackage => _hasPackages ? widget.packages[_package] : null;
 
+  ProviderModel get _provider => AppScope.read(context).providerById(widget.providerId);
+
+  /// "Visit the business" needs the provider to allow it and a place customers can find.
+  bool get _canVisit => _provider.canBeVisited;
+
+  /// House calls are the fallback when a business cannot be visited, so there is always one option.
+  bool get _canHouseCall => _provider.offersHouseCall || !_canVisit;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Start with the address the customer used last time.
     if (!_addressReady) {
       _addressReady = true;
+      // Start with the address the customer used last time.
       _address.text = AppScope.of(context).customerAddress;
+      // Start on the first day the provider works (today if open).
+      _date = _firstOpenDay() ?? _today;
+      // Only one option offered: choose it for the customer.
+      if (_canVisit != _canHouseCall) {
+        _atBusiness = _canVisit;
+        // House call only: find the customer's current location once the screen is shown.
+        if (!_canVisit) WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _selectHouseCall(); });
+      }
     }
   }
 
@@ -91,25 +151,22 @@ class _BookingScreenState extends State<BookingScreen> {
 
   String get _dateText => '${_date.day} ${_months[_date.month - 1]} ${_date.year}';
 
-  bool get _isToday => DateUtils.isSameDay(_date, _today);
+  /// How long the booking holds the provider's time: one slot, or the hours of a per-hour service.
+  int get _blockedMinutes =>
+      (_hasPackages || _fixed) ? _provider.workingHours.slotMinutes : _hours * 60;
 
-  /// "2:00 PM" -> minutes since midnight.
-  static int _minutesOf(String slot) {
-    final m = RegExp(r'(\d{1,2}):(\d{2})\s*(AM|PM)', caseSensitive: false)
-        .firstMatch(slot)!;
-    var hour = int.parse(m.group(1)!);
-    final isPm = m.group(3)!.toUpperCase() == 'PM';
-    if (isPm && hour < 12) hour += 12;
-    if (!isPm && hour == 12) hour = 0;
-    return hour * 60 + int.parse(m.group(2)!);
+  /// First day from today (within a year) on which the provider works, or null if they never do.
+  DateTime? _firstOpenDay() {
+    final hours = _provider.workingHours;
+    for (var i = 0; i < 366; i++) {
+      final day = _today.add(Duration(days: i));
+      if (hours.isOpenOn(day)) return day;
+    }
+    return null;
   }
 
-  /// A slot can't be booked if it is already in the past (only matters today).
-  bool _isPast(String slot) {
-    if (!_isToday) return false;
-    final now = DateTime.now();
-    return _minutesOf(slot) <= now.hour * 60 + now.minute;
-  }
+  /// "10:00 AM" for the booking summary.
+  String get _timeText => clockLabel(_slot!.hour * 60 + _slot!.minute);
 
   @override
   void dispose() {
@@ -118,55 +175,38 @@ class _BookingScreenState extends State<BookingScreen> {
     super.dispose();
   }
 
-  Future<void> _pickCustomTime() async {
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-      builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context).copyWith(
-          alwaysUse24HourFormat: false,
-          textScaler: TextScaler.noScaling,
-        ),
-        child: Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: Theme.of(context).colorScheme.copyWith(primary: AppColors.teal),
-          ),
-          child: child!,
-        ),
-      ),
-    );
-    if (picked == null) return;
-    final hour = picked.hourOfPeriod == 0 ? 12 : picked.hourOfPeriod;
-    final minute = picked.minute.toString().padLeft(2, '0');
-    final period = picked.period == DayPeriod.am ? 'AM' : 'PM';
-    final slot = '$hour:$minute $period';
-    if (!mounted) return;
-    if (_isPast(slot)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('That time has already passed. Pick a later time.')),
-      );
-      return;
-    }
-    setState(() => _time = slot);
-  }
-
   void _confirm() {
-    if (_time == null) {
+    if (_atBusiness == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('Please choose a preferred time')),
+        const SnackBar(
+            duration: Duration(seconds: 3),
+            content: Text('Choose how you want the service: visit the business or request a house call')),
       );
       return;
     }
-    if (_isPast(_time!)) {
-      setState(() => _time = null);
+    if (_slot == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('That time has already passed. Please select another.')),
+        const SnackBar(duration: Duration(seconds: 3), content: Text('Please choose a time slot')),
       );
       return;
     }
-    if (_address.text.trim().isEmpty) {
+    // Checked again now: the slot may have been taken or passed since it was shown.
+    if (!_slot!.isAfter(DateTime.now()) ||
+        !AppScope.read(context).slotIsFree(widget.providerId, _slot!, _blockedMinutes)) {
+      setState(() => _slot = null);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: const Duration(seconds: 3), content: Text('Enter the address where the service is needed')),
+        const SnackBar(
+            duration: Duration(seconds: 3),
+            content: Text('That time slot is no longer available. Please choose another.')),
+      );
+      return;
+    }
+    final atBusiness = _atBusiness!;
+    if (!atBusiness && _address.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            duration: Duration(seconds: 3),
+            content: Text('Enter the address where the provider should come')),
       );
       return;
     }
@@ -195,10 +235,12 @@ class _BookingScreenState extends State<BookingScreen> {
             hours: (_hasPackages || _fixed) ? 1 : _hours,
             packageName: _hasPackages ? _chosenPackage!.name : (_fixed ? 'Fixed price' : null),
             date: _dateText,
-            time: _time!,
-            address: _address.text.trim(),
-            latitude: _lat,
-            longitude: _lng,
+            time: _timeText,
+            atBusiness: atBusiness,
+            blockedMinutes: _blockedMinutes,
+            address: atBusiness ? _provider.address : _address.text.trim(),
+            latitude: atBusiness ? null : _lat,
+            longitude: atBusiness ? null : _lng,
             notes: _notes.text.trim(),
           ),
         ),
@@ -262,6 +304,214 @@ class _BookingScreenState extends State<BookingScreen> {
         ),
       );
 
+  /// After the booked length changes (more hours), drop the chosen slot if it no longer fits.
+  void _keepSlotIfFree() {
+    final slot = _slot;
+    if (slot != null && !AppScope.read(context).slotIsFree(widget.providerId, slot, _blockedMinutes)) {
+      _slot = null;
+    }
+  }
+
+  /// The time slots of the chosen day: free ones can be picked, booked ones are shown but disabled.
+  List<Widget> _slotSection() {
+    final app = AppScope.of(context);
+    final slotLength = _provider.workingHours.slotMinutes;
+    final slots = app.slotsFor(widget.providerId, _date, _blockedMinutes);
+    return [
+      _label(_atBusiness == true ? 'Arrival time slot' : 'Time slot', top: 8),
+      const SizedBox(height: 8),
+      if (slots.isEmpty)
+        const Text('No time slots left on this day. Please choose another day.',
+            style: TextStyle(fontSize: 13, color: AppColors.textGrey))
+      else
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final s in slots)
+              () {
+                final label = clockLabel(s.start.hour * 60 + s.start.minute);
+                // Booked = another booking overlaps this slot; otherwise it is just too close to closing
+                // time for the hours chosen.
+                final booked = !app.slotIsFree(widget.providerId, s.start, slotLength);
+                return ChoiceChip(
+                  label: Text(s.free ? label : '$label \u00b7 ${booked ? 'Booked' : 'Too late'}'),
+                  selected: _slot == s.start,
+                  selectedColor: AppColors.teal.withValues(alpha: 0.15),
+                  onSelected: s.free ? (_) => setState(() => _slot = s.start) : null,
+                );
+              }(),
+          ],
+        ),
+      if (!_hasPackages && !_fixed && _hours > 1)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text('$_hours hours from the slot you choose are reserved for you.',
+              style: const TextStyle(fontSize: 12, color: AppColors.textGrey)),
+        ),
+    ];
+  }
+
+  /// One of the two booking options. [onTap] null = the only option (shown as chosen, not tappable).
+  Widget _optionCard({
+    required bool selected,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    VoidCallback? onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: selected ? AppColors.teal.withValues(alpha: 0.05) : Colors.white,
+            border: Border.all(
+                color: selected ? AppColors.teal : AppColors.borderGrey, width: selected ? 1.6 : 1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: AppColors.teal, size: 26),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.textDark)),
+                    const SizedBox(height: 2),
+                    Text(subtitle,
+                        style: const TextStyle(fontSize: 13, height: 1.35, color: AppColors.textGrey)),
+                  ],
+                ),
+              ),
+              if (onTap != null)
+                Icon(selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                    color: selected ? AppColors.teal : AppColors.textGrey),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// "How would you like to get this service?" with the options this provider offers.
+  List<Widget> _optionSection() {
+    final both = _canVisit && _canHouseCall;
+    return [
+      _label(both ? 'How would you like to get this service?' : 'How this service works', top: 20),
+      const SizedBox(height: 8),
+      if (_canVisit)
+        _optionCard(
+          selected: _atBusiness == true,
+          icon: Icons.storefront_outlined,
+          title: 'Visit the business',
+          subtitle: 'Go to ${widget.providerName}’s premises (shop, salon or practice).',
+          onTap: both ? () => setState(() => _atBusiness = true) : null,
+        ),
+      if (_canHouseCall)
+        _optionCard(
+          selected: _atBusiness == false,
+          icon: Icons.home_outlined,
+          title: 'Request a house call',
+          subtitle: 'The provider comes to your home or current location.',
+          onTap: both ? _selectHouseCall : null,
+        ),
+    ];
+  }
+
+  /// Visit: the Business Location Map (where the provider's business physically is).
+  List<Widget> _businessLocationSection() {
+    final p = _provider;
+    return [
+      _label('Where to go'),
+      const SizedBox(height: 8),
+      BusinessLocationMap(
+        businessId: p.id,
+        businessName: p.name,
+        address: p.address,
+        latitude: p.latitude,
+        longitude: p.longitude,
+      ),
+    ];
+  }
+
+  /// House call: where the provider must come.
+  List<Widget> _houseCallAddressSection() => [
+        _label('Your address'),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _address,
+          // Typing by hand replaces any spot chosen on the map.
+          onChanged: (_) {
+            if (_lat != null) setState(() { _lat = null; _lng = null; _fromGps = false; });
+          },
+          textCapitalization: TextCapitalization.words,
+          style: const TextStyle(fontSize: 14),
+          decoration: InputDecoration(
+            hintText: 'Where should the provider come?',
+            hintStyle: const TextStyle(fontSize: 14, color: AppColors.textGrey),
+            prefixIcon: const Icon(Icons.location_on_outlined, size: 20, color: AppColors.teal),
+            contentPadding: const EdgeInsets.all(14),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppColors.borderGrey),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: AppColors.teal),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            OutlinedButton.icon(
+              onPressed: _locating ? null : _useMyLocation,
+              icon: const Icon(Icons.my_location, size: 20),
+              label: Text(_locating ? 'Finding you…' : 'Use my current location'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _chooseOnMap,
+              icon: Icon(_lat == null ? Icons.map_outlined : Icons.check_circle_outline, size: 20),
+              label: Text(_lat == null ? 'Choose on map' : 'Location pinned (change)'),
+            ),
+          ],
+        ),
+        // The Customer Location Map: where the provider will come.
+        if (_locating)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Row(children: [
+              SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+              SizedBox(width: 10),
+              Text('Finding your current location…', style: TextStyle(fontSize: 13, color: AppColors.textGrey)),
+            ]),
+          )
+        else if (_lat != null && _lng != null) ...[
+          const SizedBox(height: 10),
+          CustomerLocationMap(
+            latitude: _lat!,
+            longitude: _lng!,
+            title: _fromGps ? 'Your current location' : 'Your pinned location',
+          ),
+        ],
+        const SizedBox(height: 8),
+        Text(
+          'Your house call request goes to ${widget.providerName}. They accept or decline it; '
+          'if they decline, your booking fee is refunded.',
+          style: const TextStyle(fontSize: 13, height: 1.4, color: AppColors.textGrey),
+        ),
+      ];
+
   Widget _label(String text, {double top = 16}) => Padding(
     padding: EdgeInsets.only(top: top),
     child: Text(text,
@@ -295,52 +545,34 @@ class _BookingScreenState extends State<BookingScreen> {
                       fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.textDark),
                 ),
               ),
+              ..._optionSection(),
               _label('Select Date', top: 20),
-              Theme(
-                data: theme.copyWith(
-                  colorScheme: theme.colorScheme
-                      .copyWith(primary: AppColors.teal, onPrimary: Colors.white),
-                ),
-                child: CalendarDatePicker(
-                  initialDate: _today,
-                  firstDate: _today,
-                  lastDate: _today.add(const Duration(days: 365)),
-                  onDateChanged: (d) => setState(() {
-                    _date = d;
-                    if (_time != null && _isPast(_time!)) _time = null;
-                  }),
-                ),
-              ),
-              _label('Preferred Time', top: 8),
-              const SizedBox(height: 8),
-              InkWell(
-                onTap: _pickCustomTime,
-                borderRadius: BorderRadius.circular(12),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: _time == null ? AppColors.borderGrey : AppColors.teal),
-                    borderRadius: BorderRadius.circular(12),
+              if (_firstOpenDay() == null)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text('This provider has not set any working days yet, so they cannot be booked.',
+                      style: TextStyle(fontSize: 13, color: AppColors.textGrey)),
+                )
+              else ...[
+                Theme(
+                  data: theme.copyWith(
+                    colorScheme: theme.colorScheme
+                        .copyWith(primary: AppColors.teal, onPrimary: Colors.white),
                   ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.access_time, size: 20, color: AppColors.teal),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          _time ?? 'Choose the time you want the provider to arrive',
-                          style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: _time == null ? FontWeight.w400 : FontWeight.w600,
-                              color: _time == null ? AppColors.textGrey : AppColors.textDark),
-                        ),
-                      ),
-                      const Icon(Icons.keyboard_arrow_down, color: AppColors.textGrey),
-                    ],
+                  child: CalendarDatePicker(
+                    initialDate: _date,
+                    firstDate: _today,
+                    lastDate: _today.add(const Duration(days: 365)),
+                    // Only days the provider works can be chosen.
+                    selectableDayPredicate: _provider.workingHours.isOpenOn,
+                    onDateChanged: (d) => setState(() {
+                      _date = d;
+                      _slot = null;
+                    }),
                   ),
                 ),
-              ),
+                ..._slotSection(),
+              ],
 
               if (_hasPackages) ...[
                 _label('Choose a package'),
@@ -433,7 +665,7 @@ class _BookingScreenState extends State<BookingScreen> {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    _stepButton(Icons.remove, _hours > 1 ? () => setState(() => _hours--) : null),
+                    _stepButton(Icons.remove, _hours > 1 ? () => setState(() { _hours--; _keepSlotIfFree(); }) : null),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 18),
                       child: Text(_hours == 1 ? '1 hour' : '$_hours hours',
@@ -442,7 +674,7 @@ class _BookingScreenState extends State<BookingScreen> {
                               fontWeight: FontWeight.w600,
                               color: AppColors.textDark)),
                     ),
-                    _stepButton(Icons.add, _hours < 8 ? () => setState(() => _hours++) : null),
+                    _stepButton(Icons.add, _hours < 8 ? () => setState(() { _hours++; _keepSlotIfFree(); }) : null),
                     const Spacer(),
                     Text('R${widget.hourlyRate}/hour',
                         style: const TextStyle(fontSize: 14, color: AppColors.textGrey)),
@@ -450,38 +682,8 @@ class _BookingScreenState extends State<BookingScreen> {
                 ),
               ],
 
-              _label('Service Address'),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _address,
-                // Typing by hand replaces any spot chosen on the map.
-                onChanged: (_) {
-                  if (_lat != null) setState(() { _lat = null; _lng = null; });
-                },
-                textCapitalization: TextCapitalization.words,
-                style: const TextStyle(fontSize: 14),
-                decoration: InputDecoration(
-                  hintText: 'Where should the provider come?',
-                  hintStyle: const TextStyle(fontSize: 14, color: AppColors.textGrey),
-                  prefixIcon: const Icon(Icons.location_on_outlined,
-                      size: 20, color: AppColors.teal),
-                  contentPadding: const EdgeInsets.all(14),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppColors.borderGrey),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppColors.teal),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _chooseOnMap,
-                icon: Icon(_lat == null ? Icons.map_outlined : Icons.check_circle_outline, size: 20),
-                label: Text(_lat == null ? 'Choose on map' : 'Location pinned (change)'),
-              ),
+              if (_atBusiness == true) ..._businessLocationSection(),
+              if (_atBusiness == false) ..._houseCallAddressSection(),
 
               _label('Additional Notes'),
               const SizedBox(height: 8),
@@ -525,7 +727,7 @@ class _BookingScreenState extends State<BookingScreen> {
                       padding: EdgeInsets.only(top: 12),
                       child: Divider(height: 1),
                     ),
-                    _priceRow('Pay now (${(kBookingFeeRate * 100).round()}% deposit)', 'R$_fee',
+                    _priceRow('Booking fee now (${(kBookingFeeRate * 100).round()}%, refundable)', 'R$_fee',
                         bold: true, color: AppColors.teal),
                     _priceRow('Pay after the service is done', 'R${_serviceTotal - _fee}'),
                   ],
@@ -533,11 +735,14 @@ class _BookingScreenState extends State<BookingScreen> {
               ),
               const SizedBox(height: 10),
               const Text(
-                'Your request goes to the provider first. Your deposit counts toward the price and is refunded if they decline.',
+                'The booking fee secures your time slot while the business reviews your request. It counts toward the price and is refunded if they decline.',
                 style: TextStyle(fontSize: 13, height: 1.4, color: AppColors.textGrey),
               ),
               const SizedBox(height: 20),
-              TealButton('Pay R$_fee deposit', height: 52, onPressed: _confirm),
+              TealButton(
+                  _atBusiness == false ? 'Send request · Pay R$_fee booking fee' : 'Pay R$_fee booking fee',
+                  height: 52,
+                  onPressed: _confirm),
               const SizedBox(height: 12),
             ],
           ),

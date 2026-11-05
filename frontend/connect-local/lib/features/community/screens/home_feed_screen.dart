@@ -44,12 +44,16 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
 
   static const _categoryIcons = <String, IconData>{
     'ALL': Icons.apps_rounded,
-    'Home Repair': Icons.handyman_rounded,
-    'Cleaning': Icons.cleaning_services_rounded,
-    'Beauty': Icons.spa_rounded,
-    'Tutoring': Icons.school_rounded,
-    'Gardening': Icons.yard_rounded,
-    'Security': Icons.shield_rounded,
+    'Beauty & Health': Icons.spa_rounded,
+    'Healthcare': Icons.medical_services_rounded,
+    'Plumbing': Icons.plumbing_rounded,
+    'Cleaning Services': Icons.cleaning_services_rounded,
+    'Education & Tutoring': Icons.school_rounded,
+    'Automotive Services': Icons.car_repair_rounded,
+    'Electrical Services': Icons.electrical_services_rounded,
+    'Events & Photography': Icons.photo_camera_rounded,
+    'Home Maintenance': Icons.handyman_rounded,
+    'Other': Icons.more_horiz_rounded,
   };
 
   @override

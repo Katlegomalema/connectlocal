@@ -1,3 +1,5 @@
+import 'package:connect_local/core/api_client.dart';
+import 'package:connect_local/features/auth/api_auth_service.dart';
 import 'package:connect_local/features/auth/auth_service.dart';
 import 'package:connect_local/features/auth/screens/register_screen.dart';
 import 'package:connect_local/features/community/state/app_state.dart';
@@ -12,7 +14,7 @@ Future<List<TextField>> openRegister(WidgetTester tester, Size size) async {
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   final app = AppState();
-  authService = LocalAuthService(app);
+  authService = ApiAuthService(ApiClient(baseUrl: '')); // not called in these tests
   await tester.pumpWidget(ConnectLocalApp(appState: app));
   await tester.pump(const Duration(seconds: 5)); // splash
   await tester.pumpAndSettle();

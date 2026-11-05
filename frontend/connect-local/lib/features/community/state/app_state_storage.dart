@@ -157,6 +157,10 @@ extension AppStateStorage on AppState {
             'distanceKm': p.distanceKm,
             'latitude': p.latitude,
             'longitude': p.longitude,
+            'address': p.address,
+            'offersVisit': p.offersVisit,
+            'offersHouseCall': p.offersHouseCall,
+            'workingHours': p.workingHours.toJson(),
             'verified': p.verified,
             'avatar': _photoToJson(p.avatar, budget),
             'services': [
@@ -202,6 +206,8 @@ extension AppStateStorage on AppState {
             'pinVerified': b.pinVerified,
             'distanceKm': b.distanceKm,
             'phone': b.phone,
+            'atBusiness': b.atBusiness,
+            'blockedMinutes': b.blockedMinutes,
             'address': b.address,
             'lat': b.latitude,
             'lng': b.longitude,
@@ -338,6 +344,12 @@ extension AppStateStorage on AppState {
           ..distanceKm = (raw['distanceKm'] as num).toDouble()
           ..latitude = (raw['latitude'] as num?)?.toDouble()
           ..longitude = (raw['longitude'] as num?)?.toDouble()
+          ..address = (raw['address'] as String?) ?? ''
+          ..offersVisit = (raw['offersVisit'] as bool?) ?? false
+          ..offersHouseCall = (raw['offersHouseCall'] as bool?) ?? true
+          ..workingHours = raw['workingHours'] == null
+              ? WorkingHours.standard
+              : WorkingHours.fromJson(raw['workingHours'])
           ..verified = raw['verified'] as bool
           ..avatar = _photoFromJson(raw['avatar']);
         p.services
@@ -430,6 +442,8 @@ extension AppStateStorage on AppState {
               completionPin: b['completionPin'] as String?,
               distanceKm: ((b['distanceKm'] as num?) ?? 0).toDouble(),
               phone: (b['phone'] as String?) ?? '',
+              atBusiness: (b['atBusiness'] as bool?) ?? false,
+              blockedMinutes: (b['blockedMinutes'] as int?) ?? 60,
               address: (b['address'] as String?) ?? '',
               notes: (b['notes'] as String?) ?? '',
               status: _enumByName(BookingStatus.values, b['status'], BookingStatus.pending),

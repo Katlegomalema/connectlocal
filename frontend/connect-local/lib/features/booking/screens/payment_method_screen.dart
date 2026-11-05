@@ -139,23 +139,26 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              ScreenHeader(widget.isFee ? 'Pay Deposit' : 'Pay Remaining Balance'),
+              ScreenHeader(widget.isFee ? 'Pay Booking Fee' : 'Pay Remaining Balance'),
               const SizedBox(height: 14),
-              GreyCard(
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(widget.isFee ? 'Deposit (15%, counts toward the price)' : 'Remaining balance',
-                          style: const TextStyle(fontSize: 14, color: AppColors.textDark)),
-                    ),
-                    Text('R${widget.amount}',
-                        style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.teal)),
-                  ],
+              if (widget.isFee)
+                _BookingFeeExplainer(request: widget.request!)
+              else
+                GreyCard(
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Remaining balance',
+                            style: TextStyle(fontSize: 14, color: AppColors.textDark)),
+                      ),
+                      Text('R${widget.amount}',
+                          style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.teal)),
+                    ],
+                  ),
                 ),
-              ),
               const SizedBox(height: 18),
               const Text('How would you like to pay?',
                   style: TextStyle(
@@ -215,8 +218,8 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
                 const Padding(
                   padding: EdgeInsets.only(top: 14),
                   child: Text(
-                    'The deposit is always paid online and secures your booking. It counts toward the price. '
-                    'You pay the remaining balance after the service is done, by card, Instant EFT, Capitec Pay, Scan to Pay or cash.',
+                    'The booking fee is always paid online. You pay the remaining balance after the service is done, '
+                    'by card, Instant EFT, Capitec Pay, Scan to Pay or cash.',
                     style: TextStyle(fontSize: 13, height: 1.45, color: AppColors.textGrey),
                   ),
                 ),
@@ -231,6 +234,88 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Explains the booking fee before the customer pays it: what it is, that it secures the time slot, and
+/// when it is refunded. Matches the rules in AppState (refund on decline / cancel while pending).
+class _BookingFeeExplainer extends StatelessWidget {
+  final BookingRequest request;
+  const _BookingFeeExplainer({required this.request});
+
+  Widget _point(IconData icon, String title, String text) => Padding(
+        padding: const EdgeInsets.only(top: 14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, size: 22, color: AppColors.teal),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                  const SizedBox(height: 2),
+                  Text(text, style: const TextStyle(fontSize: 13, height: 1.4, color: AppColors.textGrey)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final fee = request.fee;
+    final total = request.serviceTotal;
+    final balance = total - fee;
+    final business = request.providerName;
+    final percent = (kBookingFeeRate * 100).round();
+    return GreyCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text('Booking fee',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+              ),
+              Text('R$fee',
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.teal)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text('$percent% of the R$total service price',
+              style: const TextStyle(fontSize: 13, color: AppColors.textGrey)),
+          _point(
+            Icons.event_available_outlined,
+            'Secures your time slot',
+            'It reserves ${request.date} at ${request.time} with $business while they review your request.',
+          ),
+          _point(
+            Icons.replay_rounded,
+            'Refundable',
+            'If $business declines your booking, the full R$fee is sent back to you. '
+                'Still waiting for them to accept? You can cancel and get it all back.',
+          ),
+          _point(
+            Icons.savings_outlined,
+            'Counts toward the price',
+            'It is not an extra charge. After the service you pay the remaining R$balance.',
+          ),
+          const SizedBox(height: 14),
+          const Divider(height: 1),
+          const SizedBox(height: 10),
+          const Text(
+            'Once the business accepts, the booking fee becomes part of the price and is not refunded if you cancel.',
+            style: TextStyle(fontSize: 12, height: 1.4, color: AppColors.textGrey),
+          ),
+        ],
       ),
     );
   }

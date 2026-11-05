@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../shared/brand.dart';
-import '../../shared/location_map.dart';
+import '../../shared/booking_maps.dart';
 import '../../shared/photo_viewer.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
@@ -73,6 +73,20 @@ class _ProviderProfileScreenState extends State<ProviderProfileScreen> {
                       child: StatusChip('Verified business', color: AppColors.teal),
                     ),
                   ],
+                  // How customers can book this provider.
+                  const SizedBox(height: 8),
+                  Center(
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        if (p.canBeVisited) const StatusChip('Visit the business', color: AppColors.green),
+                        if (p.offersHouseCall || !p.canBeVisited)
+                          const StatusChip('House calls', color: AppColors.green),
+                      ],
+                    ),
+                  ),
                   const SizedBox(height: 2),
                   // Only the real GPS distance is shown, never a sample number.
                   if (p.distanceIsLive)
@@ -90,30 +104,16 @@ class _ProviderProfileScreenState extends State<ProviderProfileScreen> {
                       ),
                     ),
 
-                  // ---- location ----
-                  if (p.latitude != null && p.longitude != null) ...[
+                  // ---- Business Location Map: where the business physically is ----
+                  if (p.hasBusinessLocation) ...[
                     const SizedBox(height: 28),
-                    const SectionTitle('Location'),
-                    const SizedBox(height: 12),
-                    LocationMap(
+                    BusinessLocationMap(
+                      businessId: p.id,
+                      businessName: p.name,
+                      address: p.address,
+                      latitude: p.latitude,
+                      longitude: p.longitude,
                       height: 180,
-                      interactive: false,
-                      pins: [
-                        MapPin(
-                          id: p.id,
-                          latitude: p.latitude!,
-                          longitude: p.longitude!,
-                          label: p.name,
-                        ),
-                      ],
-                      onTap: () => openDirections(context, p.latitude!, p.longitude!),
-                    ),
-                    const SizedBox(height: 10),
-                    OutlinedButton.icon(
-                      onPressed: () =>
-                          openDirections(context, p.latitude!, p.longitude!),
-                      icon: const Icon(Icons.directions_outlined, size: 20),
-                      label: const Text('Get directions'),
                     ),
                   ],
 

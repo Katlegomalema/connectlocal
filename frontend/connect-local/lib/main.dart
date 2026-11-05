@@ -6,7 +6,6 @@ import 'core/api_client.dart';
 import 'core/connect_local_repository.dart';
 import 'features/auth/api_auth_service.dart';
 import 'features/auth/auth_service.dart';
-import 'features/shared/app_config.dart';
 import 'features/auth/screens/splash_screen.dart';
 import 'features/community/state/app_state.dart';
 import 'features/community/theme/app_theme.dart';
@@ -17,13 +16,11 @@ Future<void> main() async {
   // bookings...) so a refresh or restart does not wipe the data.
   final appState = AppState();
   await appState.loadSaved();
-  // Real accounts come from the backend. Device-only accounts (LocalAuthService) are a dev tool:
-  // only with --dart-define=DEV_TOOLS=true and no API_BASE_URL.
+  // Accounts only come from the backend (there are no device-only or demo accounts).
+  // Without --dart-define=API_BASE_URL=... sign-up and login show "not connected to a server".
   ApiClient.instance = ApiClient();
   await ApiClient.instance.tokens.load();
-  authService = AppConfig.devTools && !ApiClient.instance.isConfigured
-      ? LocalAuthService(appState)
-      : ApiAuthService(ApiClient.instance);
+  authService = ApiAuthService(ApiClient.instance);
   if (ApiClient.instance.isConfigured) {
     // Providers, services and categories come from the server (not from this device).
     appState.repository = ConnectLocalRepository(ApiClient.instance);

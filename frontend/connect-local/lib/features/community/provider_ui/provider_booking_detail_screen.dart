@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/booking_maps.dart';
+
 import 'app_colors.dart';
 import 'avatar_box.dart';
 import 'common.dart';
@@ -37,6 +39,10 @@ class ProviderBookingDetailScreen extends StatelessWidget {
   /// Opens directions to the customer (provider's view).
   final VoidCallback? onDirections;
 
+  /// House call: where the customer is (shown on the Customer Location Map). Null for a business visit.
+  final double? customerLatitude;
+  final double? customerLongitude;
+
   const ProviderBookingDetailScreen({
     super.key,
     this.status = 'Pending Confirmation',
@@ -56,6 +62,8 @@ class ProviderBookingDetailScreen extends StatelessWidget {
     this.completeLabel = 'Enter PIN to Verify & Start',
     this.onChat,
     this.onDirections,
+    this.customerLatitude,
+    this.customerLongitude,
   });
 
   void _message(BuildContext context, String text) {
@@ -136,7 +144,17 @@ class ProviderBookingDetailScreen extends StatelessWidget {
               _line('Date: $date'),
               _line('Time: $time'),
               _line('Location: $location'),
-              if (onDirections != null)
+              if (customerLatitude != null && customerLongitude != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: CustomerLocationMap(
+                    latitude: customerLatitude!,
+                    longitude: customerLongitude!,
+                    title: 'Customer location',
+                    directionsLabel: 'Get directions to the customer',
+                  ),
+                )
+              else if (onDirections != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 10),
                   child: OutlinedButton.icon(
