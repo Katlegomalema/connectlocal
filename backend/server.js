@@ -32,6 +32,12 @@ const server = app.listen(PORT, () => {
   });
 });
 
+// Keep idle connections open longer than the proxies and phones in front of us (Codespaces port forwarding,
+// Android's connection pool). Node's default of 5 s closes a connection the app may be about to reuse, so the
+// first request after a pause (e.g. a slow password) could fail with "connection closed".
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000; // must be larger than keepAliveTimeout
+
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     logger.fatal(`Port ${PORT} is already in use. Another server is probably still running `

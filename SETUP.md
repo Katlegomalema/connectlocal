@@ -58,8 +58,16 @@ cd backend
 npm start
 ```
 
-Then open the **Ports** tab in VS Code, right-click port **3000** → **Port Visibility → Public**.
-A private port answers with a GitHub login page instead of JSON, and the app then says it cannot reach the server.
+Then make port **3000** Public, in a second terminal:
+
+```bash
+cd backend && npm run port:public      # runs: gh codespace ports visibility 3000:public
+```
+
+or in VS Code: **Ports** tab → right-click port **3000** → **Port Visibility → Public**.
+Do this **every time you restart the server**: Codespaces can set the port back to Private. A Private port answers
+with a GitHub sign-in page (302 / 401) instead of JSON. The app then says *"make port 3000 public"*, and in the
+browser it looks like a CORS error.
 
 Check it works:
 
@@ -213,7 +221,17 @@ Restart the backend. Without this, the browser blocks every API call from the Ne
 
 ---
 
-## 6. Emails (confirm address, reset password)
+## 6. Maps and address search
+
+- **Map tiles:** CARTO "Voyager" (OpenStreetMap data), free without a key, allowed for apps and web pages.
+  The attribution "© OpenStreetMap contributors © CARTO" must stay visible (it is drawn on every map).
+  Another provider: build with `--dart-define=MAP_TILE_URL=...` and `--dart-define=MAP_ATTRIBUTION=...`.
+- **Address search** goes through our backend (`GET /api/v1/geo/search?q=`, `/geo/reverse?lat=&lng=`). It calls
+  Nominatim at most once per second with ConnectLocal's name, and caches answers. Optional in `backend/.env`:
+  `NOMINATIM_EMAIL` (so Nominatim can contact us instead of blocking us).
+- No Google Maps key is used anywhere; you can delete `GOOGLE_MAPS_API_KEY` from `backend/.env`.
+
+## 7. Emails (confirm address, reset password)
 
 Supabase sends both emails.
 
@@ -230,7 +248,7 @@ Supabase sends both emails.
 
 ---
 
-## 7. Checks before you push
+## 8. Checks before you push
 
 ```bash
 # backend
@@ -252,11 +270,14 @@ end. It should finish with `ALL PASSED` and `temporary test users left: 0`.
 
 ---
 
-## 8. Common problems
+## 9. Common problems
 
 | What you see | Fix |
 |---|---|
-| App: "cannot reach the server" / the API returns an HTML page | Port 3000 is Private, or the backend is not running. |
+| App: "cannot reach the server" / "make port 3000 public" / the API returns an HTML page | Port 3000 is Private (`npm run port:public`), or the backend is not running. |
+| Login works, then stops after a while | The port went back to Private after a server restart: run `npm run port:public` again. |
+| Map: "The map can't load" | No internet on the device. Tap Retry once it is back. |
+| "Location is blocked for ConnectLocal" | Phone: Settings → Apps → ConnectLocal → Permissions → Location. Chrome: lock icon in the address bar → Location → Allow. |
 | Browser console: "blocked by CORS policy" | Add the site's exact address to `CORS_ORIGINS`, then restart the backend. |
 | `Port 3000 is already in use` | `kill $(lsof -t -i:3000)`, or start on another port: `PORT=3001 npm start`. |
 | `npm run db:push` cannot connect | Use the Session pooler string (section 1.1), not `db.<ref>.supabase.co`. |

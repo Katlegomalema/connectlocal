@@ -35,6 +35,23 @@ class ConnectLocalAdminApp extends StatefulWidget {
 
 class _ConnectLocalAdminAppState extends State<ConnectLocalAdminApp> {
   final AppState _appState = AppState()..repository = ConnectLocalRepository(ApiClient.instance);
+  final _navigator = GlobalKey<NavigatorState>();
+  final _messenger = GlobalKey<ScaffoldMessengerState>();
+
+  @override
+  void initState() {
+    super.initState();
+    // The admin's session was refused: back to the admin sign-in page.
+    ApiClient.instance.onSessionExpired = () {
+      _appState.signOut();
+      _navigator.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AdminLoginScreen()),
+        (route) => false,
+      );
+      _messenger.currentState?.showSnackBar(const SnackBar(
+          duration: Duration(seconds: 4), content: Text('Your session has ended. Please sign in again.')));
+    };
+  }
 
   @override
   void dispose() {
@@ -46,6 +63,8 @@ class _ConnectLocalAdminAppState extends State<ConnectLocalAdminApp> {
   Widget build(BuildContext context) => AppScope(
         state: _appState,
         child: MaterialApp(
+          navigatorKey: _navigator,
+          scaffoldMessengerKey: _messenger,
           title: 'ConnectLocal Admin',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.lightTheme,

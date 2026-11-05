@@ -40,3 +40,52 @@ describe('errorHandler', () => {
     expect(run(new Error('boom')).statusCode).toBe(500);
   });
 });
+
+describe('errorHandler: request bodies, 404s and logging', () => {
+  test('a body that is not valid JSON gives a clean 400 INVALID_JSON (no parser text)', () => {
+    const err = Object.assign(new SyntaxError('Expected double-quoted property name in JSON at position 14'), {
+      type: 'entity.parse.failed', status: 400
+    });
+    const res = run(err);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ success: false, code: 'INVALID_JSON', message: 'The request body is not valid JSON' });
+  });
+
+  test('a body that is too big gives 413', () => {
+    const res = run(Object.assign(new Error('request entity too large'), { type: 'entity.too.large' }));
+    expect(res.statusCode).toBe(413);
+    expect(res.body.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
+  test('in production a 500 never shows the internal message', () => {
+    const before = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const res = run(new Error('connection string postgres://secret'));
+    process.env.NODE_ENV = before;
+    expect(res.statusCode).toBe(500);
+    expect(res.body.message).toBe('Internal server error');
+  });
+});
+
+describe('the real app: bad JSON and unknown routes', () => {
+  let app;
+  let request;
+  beforeAll(async () => {
+    process.env.CODE_HASH_SECRET = process.env.CODE_HASH_SECRET || 'test-only-secret-test-only-secret-test-only-secret';
+    ({ default: request } = await import('supertest'));
+    ({ default: app } = await import('../../src/app.js'));
+  });
+
+  test('POST with broken JSON -> 400 JSON error', async () => {
+    const res = await request(app).post('/api/v1/auth/login').set('Content-Type', 'application/json').send('{"email": "x",');
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).toMatch(/json/);
+    expect(res.body.code).toBe('INVALID_JSON');
+  });
+
+  test('unknown route -> 404 JSON error', async () => {
+    const res = await request(app).get('/api/v1/nope');
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ success: false, code: 'NOT_FOUND' });
+  });
+});

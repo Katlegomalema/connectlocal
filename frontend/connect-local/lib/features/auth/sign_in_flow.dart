@@ -23,6 +23,7 @@ Future<bool> runSignIn(
     if (!context.mounted) return false;
     app.signIn(
       userId: result.userId,
+      role: result.role,
       name: result.name,
       email: result.email,
       isProvider: result.isProvider,

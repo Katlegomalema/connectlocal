@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import 'busy_button.dart';
 
 /// Colours sampled from the Figma designs.
 class FigmaColors {
@@ -98,7 +102,7 @@ class FigmaPage extends StatelessWidget {
 /// Full-width teal button.
 class FigmaButton extends StatelessWidget {
   final String label;
-  final VoidCallback onPressed;
+  final FutureOr<void> Function() onPressed;
 
   const FigmaButton(this.label, {super.key, required this.onPressed});
 
@@ -107,7 +111,7 @@ class FigmaButton extends StatelessWidget {
     return SizedBox(
       width: double.infinity,
       height: 52,
-      child: ElevatedButton(
+      child: BusyElevatedButton(
         onPressed: onPressed,
         style: ElevatedButton.styleFrom(
           backgroundColor: FigmaColors.teal,

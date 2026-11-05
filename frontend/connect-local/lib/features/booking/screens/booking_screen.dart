@@ -98,15 +98,14 @@ class _BookingScreenState extends State<BookingScreen> {
   Future<void> _useMyLocation({bool auto = false}) async {
     if (_locating) return;
     setState(() => _locating = true);
-    final here = await currentLocation();
+    final (:point, :problem) = await findMyLocation();
     if (!mounted) return;
     setState(() => _locating = false);
+    final here = point;
     if (here == null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          duration: const Duration(seconds: 4),
-          content: Text(auto
-              ? 'We couldn’t find your current location. Type your address or choose it on the map.'
-              : 'Couldn’t get your location. Allow location access or type the address.')));
+          duration: const Duration(seconds: 5),
+          content: Text(problem ?? 'We couldn’t find your current location. Type your address or choose it on the map.')));
       return;
     }
     setState(() {

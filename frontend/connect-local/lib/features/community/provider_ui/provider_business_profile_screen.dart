@@ -56,13 +56,13 @@ class _ProviderBusinessProfileScreenState extends State<ProviderBusinessProfileS
 
   Future<void> _useMyLocation() async {
     setState(() => _locating = true);
-    final here = await currentLocation();
+    final (:point, :problem) = await findMyLocation();
     if (!mounted) return;
     setState(() => _locating = false);
+    final here = point;
     if (here == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          duration: Duration(seconds: 3),
-          content: Text('Couldn\u2019t get your location. Allow location access or type the address.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(duration: const Duration(seconds: 5), content: Text(problem ?? 'Location not available.')));
       return;
     }
     setState(() {
@@ -108,11 +108,12 @@ class _ProviderBusinessProfileScreenState extends State<ProviderBusinessProfileS
       lng = _point!.longitude;
     } else if (_location.text.trim() != app.businessLocation.trim()) {
       // A new typed address is looked up so the map pin moves with it.
-      final point = await geocodeAddress(_location.text);
+      final found = await lookupAddress(_location.text);
+      final point = found.point;
       if (!mounted) return;
       if (point == null) {
-        messenger.showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
-            content: Text('We couldn\u2019t find that address. Add the street, suburb and city.')));
+        messenger.showSnackBar(SnackBar(
+            duration: const Duration(seconds: 4), content: Text(found.problem ?? 'We couldn\u2019t find that address.')));
         return;
       }
       lat = point.latitude;

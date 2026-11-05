@@ -7,6 +7,7 @@ import 'core/connect_local_repository.dart';
 import 'features/auth/api_auth_service.dart';
 import 'features/auth/auth_service.dart';
 import 'features/auth/screens/account_recovery_screens.dart';
+import 'features/auth/screens/login_screen.dart';
 import 'features/auth/screens/splash_screen.dart';
 import 'features/community/state/app_state.dart';
 import 'features/community/theme/app_theme.dart';
@@ -24,10 +25,24 @@ Future<void> main() async {
   await ApiClient.instance.tokens.load();
   authService = ApiAuthService(ApiClient.instance);
   final appState = AppState()..repository = ConnectLocalRepository(ApiClient.instance);
+  // The refresh token was refused (signed out elsewhere, account suspended, too old): back to Login.
+  ApiClient.instance.onSessionExpired = () {
+    appState.signOut();
+    appNavigatorKey.currentState?.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
+    appMessengerKey.currentState?.showSnackBar(const SnackBar(
+        duration: Duration(seconds: 4), content: Text('Your session has ended. Please log in again.')));
+  };
   // Categories and providers for the first screens (the rest loads after sign-in).
   unawaited(appState.loadFromServer());
   runApp(ConnectLocalApp(appState: appState));
 }
+
+/// Lets code outside the widget tree (the API client) open Login and show a message.
+final appNavigatorKey = GlobalKey<NavigatorState>();
+final appMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
 class ConnectLocalApp extends StatefulWidget {
   final AppState appState;
@@ -51,6 +66,8 @@ class _ConnectLocalAppState extends State<ConnectLocalApp> {
         state: _appState,
         child: MaterialApp(
           title: 'Connect Local',
+          navigatorKey: appNavigatorKey,
+          scaffoldMessengerKey: appMessengerKey,
           debugShowCheckedModeBanner: false,
           theme: AppTheme.lightTheme,
           builder: _constrainToPhoneWidth,

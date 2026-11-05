@@ -111,6 +111,9 @@ class AppState extends ChangeNotifier {
   /// A genuine client: confirmed email AND confirmed phone number.
   bool get isClientVerified => emailVerified && verifiedPhone != null;
 
+  /// 'customer' or 'provider' (the account type chosen at sign-up, from the server).
+  String accountRole = 'customer';
+
   /// True for an approved provider (Provider mode is only offered to them).
   bool isProvider = false;
 
@@ -134,10 +137,12 @@ class AppState extends ChangeNotifier {
     required String email,
     required bool isProvider,
     String userId = '',
+    String role = 'customer',
     bool emailVerified = true,
     String? verifiedPhone,
   }) {
     this.userId = userId;
+    accountRole = role;
     customerName = name.trim();
     customerEmail = email.trim();
     this.emailVerified = emailVerified;
@@ -152,6 +157,7 @@ class AppState extends ChangeNotifier {
     _liveTimer?.cancel();
     _liveTimer = null;
     userId = '';
+    accountRole = 'customer';
     customerName = '';
     customerEmail = '';
     customerPhone = '';
@@ -373,7 +379,8 @@ class AppState extends ChangeNotifier {
   /// For a signed-in provider: their application status and (once approved) their own business.
   Future<void> _loadMyBusiness() async {
     final repo = repository;
-    if (repo == null || customerEmail.isEmpty) return;
+    // Only provider accounts have a business: asking for a customer was a 403 on every sign-in.
+    if (repo == null || customerEmail.isEmpty || accountRole != 'provider') return;
     try {
       serverApplication = await repo.myApplication();
       final server = serverApplication;

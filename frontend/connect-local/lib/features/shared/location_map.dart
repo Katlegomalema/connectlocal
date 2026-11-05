@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+
+import 'map_tiles.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const _teal = Color(0xFF1F5FA8);
@@ -60,11 +62,8 @@ class MapPin {
   });
 }
 
-/// OpenStreetMap view with one or more provider pins and (optionally) the
-/// customer's own position. Tiles come from openstreetmap.org (free, no key).
-///
-/// For production traffic, OSM's tile server has a usage policy; switch the
-/// [urlTemplate] to a hosted tile provider when the app is released.
+/// Map view with one or more provider pins and (optionally) the customer's own position.
+/// Tiles and attribution: see map_tiles.dart.
 class LocationMap extends StatelessWidget {
   final List<MapPin> pins;
   final String? selectedId;
@@ -78,8 +77,6 @@ class LocationMap extends StatelessWidget {
   final bool interactive;
   final double height;
   final VoidCallback? onTap;
-
-  static const urlTemplate = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
   const LocationMap({
     super.key,
@@ -134,10 +131,7 @@ class LocationMap extends StatelessWidget {
         child: FlutterMap(
           options: options,
           children: [
-            TileLayer(
-              urlTemplate: urlTemplate,
-              userAgentPackageName: 'com.example.connect_local',
-            ),
+            const MapTileLayer(),
             MarkerLayer(
               markers: [
                 if (userLatitude != null && userLongitude != null)
@@ -174,10 +168,7 @@ class LocationMap extends StatelessWidget {
                   ),
               ],
             ),
-            const RichAttributionWidget(
-              alignment: AttributionAlignment.bottomRight,
-              attributions: [TextSourceAttribution('© OpenStreetMap contributors')],
-            ),
+            const MapAttribution(),
           ],
         ),
       ),

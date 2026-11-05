@@ -23,6 +23,7 @@ import paymentRoutes from './routes/payment.js';
 import adminRoutes from './routes/admin.js';
 import notificationRoutes from './routes/notification.js';
 import uploadRoutes from './routes/uploads.js';
+import geoRoutes from './routes/geo.js';
 
 const app = express();
 
@@ -68,6 +69,7 @@ app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/uploads', uploadRoutes);
+app.use('/api/v1/geo', geoRoutes);
 
 // Middleware: 404 handler
 app.use(notFoundHandler);

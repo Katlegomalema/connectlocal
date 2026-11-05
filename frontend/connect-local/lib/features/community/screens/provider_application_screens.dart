@@ -151,12 +151,13 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
 
   Future<void> _useMyLocation() async {
     setState(() => _busy = true);
-    final here = await currentLocation();
+    final (:point, :problem) = await findMyLocation();
     if (!mounted) return;
     setState(() => _busy = false);
+    final here = point;
     if (here == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
-          content: Text('Couldn\u2019t get your location. Allow location access or type the address.')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(duration: const Duration(seconds: 5), content: Text(problem ?? 'Location not available.')));
       return;
     }
     setState(() {
@@ -210,11 +211,12 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
       setState(() => _busy = true);
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           duration: Duration(seconds: 2), content: Text('Finding your address on the map…')));
-      point = await geocodeAddress(_location.text);
+      final found = await lookupAddress(_location.text);
+      point = found.point;
       if (!mounted) return;
       setState(() => _busy = false);
       if (point == null) {
-        return warn('We couldn\u2019t find that address. Add the street, suburb and city, or tap "Use my current location".');
+        return warn('${found.problem ?? 'We couldn\u2019t find that address.'} Or tap "Use my current location".');
       }
     }
     final application = ProviderApplication(

@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import '../../shared/busy_button.dart';
 
 import '../theme/app_colors.dart';
 
@@ -32,7 +36,7 @@ class ScreenHeader extends StatelessWidget {
 /// Full-width teal rounded button.
 class TealButton extends StatelessWidget {
   final String text;
-  final VoidCallback onPressed;
+  final FutureOr<void> Function() onPressed;
   final double height;
   const TealButton(this.text, {super.key, required this.onPressed, this.height = 48});
 
@@ -41,7 +45,7 @@ class TealButton extends StatelessWidget {
     return SizedBox(
       width: double.infinity,
       height: height,
-      child: ElevatedButton(
+      child: BusyElevatedButton(
         onPressed: onPressed,
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.teal,

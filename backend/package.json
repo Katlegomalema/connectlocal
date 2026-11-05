@@ -14,7 +14,8 @@
     "lint": "eslint src/ --fix",
     "migrate": "node migrations/run.js",
     "db:push:dry": "node --env-file=.env scripts/db-push.mjs --dry-run",
-    "db:push": "node --env-file=.env scripts/db-push.mjs"
+    "db:push": "node --env-file=.env scripts/db-push.mjs",
+    "port:public": "bash scripts/codespace-port-public.sh 3000"
   },
   "keywords": [
     "service-marketplace",
