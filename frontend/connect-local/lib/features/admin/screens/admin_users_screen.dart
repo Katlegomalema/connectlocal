@@ -42,7 +42,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
         : 'ALL';
   }
 
-  /// Real accounts people created in the app (plus the built-in admin).
+  /// Accounts people created in the app. No sample or built-in rows.
   List<_User> _loadUsers(AppState app) {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     String since(DateTime d) => '${months[d.month - 1]} ${d.year}';
@@ -62,7 +62,6 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
             account: a,
           );
         }(),
-      _User('Admin User', 'admin@email.com', 'Admin', 'Built-in'),
     ];
   }
 
