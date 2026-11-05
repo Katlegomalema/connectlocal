@@ -952,7 +952,7 @@ class AppState extends ChangeNotifier {
               '$who accepted your request. Your booking is secured. Give them your service PIN when they arrive; you pay the remaining R${booking.balance} after the service.');
         case BookingStatus.declined:
           _notifyCustomer(booking.clientName,
-              '$who couldn’t take your booking. Your deposit of R${booking.bookingFee} will be refunded.');
+              '$who couldn’t take your booking. Your booking fee of R${booking.bookingFee} will be refunded.');
         case BookingStatus.pending:
         case BookingStatus.completed:
         case BookingStatus.cancelled:
@@ -1028,10 +1028,10 @@ class AppState extends ChangeNotifier {
     _notifyProvider(
         booking.providerId, '${booking.clientName} cancelled ${booking.serviceName}.');
     notifyListeners();
-    if (wasPending) return 'Booking cancelled. Your deposit of R${booking.bookingFee} will be refunded.';
+    if (wasPending) return 'Booking cancelled. Your booking fee of R${booking.bookingFee} will be refunded.';
     return booking.balancePaid
-        ? 'Booking cancelled. Your R${booking.balance} payment will be refunded; the deposit is non-refundable.'
-        : 'Booking cancelled. The deposit is non-refundable once a provider has accepted.';
+        ? 'Booking cancelled. Your R${booking.balance} payment will be refunded; the booking fee is non-refundable.'
+        : 'Booking cancelled. The booking fee is non-refundable once a provider has accepted.';
   }
 
   /// The customer pays (card via PayFast) or promises to pay cash for the

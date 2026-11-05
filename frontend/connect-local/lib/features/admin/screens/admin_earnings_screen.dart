@@ -52,7 +52,7 @@ class _AdminEarningsScreenState extends State<AdminEarningsScreen> {
               Expanded(
                   child: StatCard(
                       icon: Icons.lock_clock_outlined,
-                      label: 'Deposits held',
+                      label: 'Booking fees held',
                       value: money(deposits))),
             ]),
             const SizedBox(height: 12),
@@ -74,7 +74,7 @@ class _AdminEarningsScreenState extends State<AdminEarningsScreen> {
             const SizedBox(height: 8),
             const Text(
               'ConnectLocal keeps this percentage of each completed job. The provider '
-              'receives the rest in their bank account automatically. The 15% deposit '
+              'receives the rest in their bank account automatically. The 15% booking fee '
               'the customer pays when booking counts toward the price. Changing the rate '
               'only affects jobs paid from now on.',
               style: TextStyle(fontSize: 13, height: 1.45, color: AppColors.muted),

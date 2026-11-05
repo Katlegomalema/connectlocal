@@ -101,7 +101,7 @@ class AdminDashboardScreen extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: StatCard(
-                      label: 'Deposits',
+                      label: 'Booking fees',
                       value: money(app.payments
                           .where((p) =>
                               p.kind == PaymentKind.bookingFee &&

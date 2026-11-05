@@ -125,7 +125,7 @@ class CustomerBookingDetailScreen extends StatelessWidget {
                     child: Column(
                       children: [
                         _money(
-                          'Deposit (${(kBookingFeeRate * 100).round()}%, counts toward the price)',
+                          'Booking fee (${(kBookingFeeRate * 100).round()}%, counts toward the price)',
                           money(b.bookingFee),
                           b.feeRefunded
                               ? StatusChip('Refunded', color: AppColors.muted)
@@ -270,8 +270,8 @@ class CustomerBookingDetailScreen extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         title: const Text('Cancel this booking?'),
         content: Text(pending
-            ? 'Your deposit of R${b.bookingFee} will be refunded.'
-            : 'The provider already accepted, so the deposit of R${b.bookingFee} '
+            ? 'Your booking fee of R${b.bookingFee} will be refunded.'
+            : 'The provider already accepted, so the booking fee of R${b.bookingFee} '
                 'is non-refundable.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep booking')),
@@ -363,7 +363,7 @@ class _NextStep extends StatelessWidget {
         icon = Icons.hourglass_bottom_rounded;
         color = AppColors.orange;
         title = 'Waiting for the provider';
-        text = '$providerName will review your request. Your deposit of R${b.bookingFee} secures it; you pay the remaining R${b.balance} after the service is done.';
+        text = '$providerName will review your request. Your booking fee of R${b.bookingFee} secures it; you pay the remaining R${b.balance} after the service is done.';
       case BookingStatus.confirmed:
         if (b.pinVerified) {
           icon = Icons.handyman_outlined;
@@ -374,7 +374,7 @@ class _NextStep extends StatelessWidget {
           icon = Icons.check_circle_outline_rounded;
           color = AppColors.green;
           title = 'Booking secured';
-          text = '$providerName accepted your request and your deposit secured it. '
+          text = '$providerName accepted your request and your booking fee secured it. '
               'Give them your PIN when they arrive. You pay the remaining R${b.balance} after the service.';
         }
       case BookingStatus.completed:
@@ -398,14 +398,14 @@ class _NextStep extends StatelessWidget {
         icon = Icons.info_outline_rounded;
         color = AppColors.red;
         title = 'Request declined';
-        text = '$providerName couldn’t take this booking. Your deposit of R${b.bookingFee} is refunded.';
+        text = '$providerName couldn’t take this booking. Your booking fee of R${b.bookingFee} is refunded.';
       case BookingStatus.cancelled:
         icon = Icons.cancel_outlined;
         color = AppColors.muted;
         title = 'Booking cancelled';
         text = b.feeRefunded
-            ? 'Your deposit of R${b.bookingFee} is refunded.'
-            : 'The deposit is non-refundable once a provider has accepted.';
+            ? 'Your booking fee of R${b.bookingFee} is refunded.'
+            : 'The booking fee is non-refundable once a provider has accepted.';
     }
     return Container(
       padding: const EdgeInsets.all(14),

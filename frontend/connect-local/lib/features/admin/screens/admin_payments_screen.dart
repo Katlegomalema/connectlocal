@@ -35,7 +35,7 @@ class AdminPaymentsScreen extends StatelessWidget {
             Row(children: [
               Expanded(
                   child: StatCard(
-                      label: 'Deposits', value: money(fees), icon: Icons.receipt_long_outlined)),
+                      label: 'Booking fees', value: money(fees), icon: Icons.receipt_long_outlined)),
               const SizedBox(width: 12),
               Expanded(
                   child: StatCard(

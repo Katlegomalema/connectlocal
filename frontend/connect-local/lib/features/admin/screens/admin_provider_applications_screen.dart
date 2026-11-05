@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../community/utils/category_icons.dart';
+
 import '../../community/models/models.dart';
 import '../../community/state/app_state.dart';
 import '../../community/theme/app_theme.dart';
@@ -50,10 +52,18 @@ class ApplicationTile extends StatelessWidget {
                     style: const TextStyle(
                         fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.text)),
                 const SizedBox(height: 2),
-                Text('${a.services} · ${a.appliedLabel}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 13, color: AppColors.muted)),
+                Row(
+                  children: [
+                    Icon(categoryIcon(a.services), size: 15, color: AppColors.teal),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text('${a.services} · ${a.appliedLabel}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 13, color: AppColors.muted)),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,

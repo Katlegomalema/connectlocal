@@ -34,7 +34,7 @@ enum PayMethod {
 }
 
 enum PaymentKind {
-  bookingFee('Deposit'),
+  bookingFee('Booking fee'),
   service('Service payment');
 
   final String label;

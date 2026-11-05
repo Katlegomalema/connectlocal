@@ -211,7 +211,11 @@ class _ApplicationReviewScreenState extends State<ApplicationReviewScreen> {
                         ),
                         const SizedBox(height: 8),
                         _row('Email', a.email),
-                        _row('Category', a.services),
+                        _row(
+                            'Category',
+                            AppState.kCategories.any((c) => c.toLowerCase() == a.services.trim().toLowerCase())
+                                ? a.services
+                                : '${a.services} (not one of the 10 ConnectLocal categories)'),
                         _row('Location', a.location),
                         _row('Applied', a.appliedLabel),
                         _row('Description', a.description),
