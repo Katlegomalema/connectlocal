@@ -48,7 +48,6 @@ flowchart TB
     end
 
     subgraph Ext["External Integrations"]
-        GMaps[Google Maps Platform]
         PayFast[PayFast Gateway]
         FCM[Push Notification Service]
     end
@@ -59,7 +58,6 @@ flowchart TB
     UserSvc --> PG
     UserSvc --> SBStorage
     SearchSvc --> PG
-    SearchSvc --> GMaps
     BookingSvc --> PG
     MsgSvc --> PG
     MsgSvc --> Realtime
@@ -68,7 +66,6 @@ flowchart TB
     PaySvc --> PayFast
     NotifSvc --> FCM
     AdminSvc --> PG
-    FLM --> GMaps
 ```
 
 ### 4.3 Component Descriptions
@@ -79,7 +76,7 @@ flowchart TB
 | **Auth & Validation Middleware** | Verifies JWTs issued by Supabase Auth, enforces role-based access, validates request payloads. |
 | **Auth Service** | Wraps Supabase Auth flows (register, login, OTP, token refresh, logout). |
 | **User & Provider Service** | Manages customer profiles, provider business profiles, and verification workflow. |
-| **Search & Location Service** | Executes geospatial provider queries and integrates with Google Maps for geocoding/distance. |
+| **Search & Location Service** | Executes PostGIS radius queries over provider coordinates supplied by the Flutter client. |
 | **Booking Service** | Owns the booking lifecycle state machine and slot-conflict prevention logic. |
 | **Messaging Service** | Manages conversation threads and real-time delivery via Supabase Realtime. |
 | **Review Service** | Manages review submission, aggregation, and moderation. |
@@ -91,7 +88,7 @@ flowchart TB
 - **Flutter**: single codebase for Android, iOS, and Web reduces development effort for a small team while delivering native-like performance.
 - **Node.js/Express**: event-driven, non-blocking I/O model suits the read-heavy (search, browse) and real-time (messaging) workloads typical of a marketplace app; large middleware ecosystem accelerates development.
 - **PostgreSQL (Supabase)**: strong relational integrity for financial/booking data, native PostGIS extension for efficient geospatial queries, and Supabase bundles Auth/Storage/Realtime, reducing infrastructure to manage.
-- **Google Maps Platform**: industry-standard geocoding and places accuracy, well-documented Flutter SDK support.
+- **Flutter map rendering + PostGIS**: keeps tile rendering in the client and performs vendor-independent radius search in PostgreSQL.
 - **PayFast**: widely supported South African payment gateway with a straightforward server-to-server ITN verification model.
 - **Render**: simple, low-cost container hosting with GitHub-integrated CI/CD, appropriate for an academic project budget.
 

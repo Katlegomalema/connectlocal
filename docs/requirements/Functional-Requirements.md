@@ -36,10 +36,10 @@ This specification covers all customer-facing, provider-facing, and administrati
 | ID | Requirement |
 |---|---|
 | FR-LOC-01 | The system shall capture and store the geographic coordinates of registered providers. |
-| FR-LOC-02 | The system shall allow customers to search for providers within a configurable radius of their current or selected location, using Google Maps. |
+| FR-LOC-02 | The system shall allow customers to search for providers within a configurable radius of their current or selected coordinates, using PostGIS. |
 | FR-LOC-03 | The system shall allow customers to filter search results by service category, price range, and rating. |
 | FR-LOC-04 | The system shall display provider locations as markers on an interactive map. |
-| FR-LOC-05 | The system shall display estimated distance and travel time between the customer and provider. |
+| FR-LOC-05 | The system shall display the straight-line distance returned by the API between the customer and provider. |
 
 ### 4.4 Service Management Module
 | ID | Requirement |
@@ -101,7 +101,7 @@ This specification covers all customer-facing, provider-facing, and administrati
 ## 5. Assumptions
 - All users have internet access and a supported device (Android 8+, iOS 13+, or a modern browser).
 - Providers operate within jurisdictions supported by PayFast.
-- Google Maps API quota is sufficient for the expected user base during the academic project period.
+- The Flutter client can obtain or accept latitude/longitude coordinates for map search.
 
 ## 6. Constraints
 - The system must operate within Supabase's free/Pro tier resource limits for the duration of the academic project.

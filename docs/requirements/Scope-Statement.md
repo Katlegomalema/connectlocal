@@ -12,7 +12,7 @@ To provide a single point of reference for the project team, academic supervisor
 - Customer, Provider, and Administrator user roles with role-based access control.
 - Authentication via email/password, Google OAuth, email verification, and phone OTP verification.
 - Provider business profile creation and identity/business document verification workflow.
-- Location-based provider search and discovery using Google Maps (geocoding, places, distance).
+- Location-based provider search and discovery using client-supplied coordinates and PostGIS radius queries.
 - Service listing management by providers.
 - End-to-end booking workflow (request, accept/decline, reschedule, cancel, complete).
 - In-app real-time messaging between customers and providers.
@@ -49,7 +49,7 @@ To provide a single point of reference for the project team, academic supervisor
 - Documentation complete and internally consistent, suitable for supervisor and external assessor review.
 
 ## 5. Assumptions
-- The project team has continuous access to Supabase, Render, Google Maps, and PayFast sandbox accounts throughout the semester.
+- The project team has continuous access to Supabase, Render, and PayFast sandbox accounts throughout the semester.
 - Scope reflects requirements as understood at project inception; material changes will be documented via the Risk Register and Change Log.
 
 ## 6. Constraints

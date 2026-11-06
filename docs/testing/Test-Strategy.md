@@ -33,7 +33,7 @@ flowchart TD
 |---|---|
 | Local | Developer machine, isolated Supabase dev project, mocked external APIs |
 | CI | GitHub Actions runners, ephemeral test database, sandbox third-party credentials |
-| Staging | Render + Supabase staging project, sandbox PayFast, real Google Maps API (rate-limited) |
+| Staging | Render + Supabase staging project, PostGIS-enabled provider search, sandbox PayFast |
 
 ### 4.3 Entry & Exit Criteria
 **Entry criteria for System Testing:** All planned features for the milestone merged to `develop`; CI green; no open critical bugs.

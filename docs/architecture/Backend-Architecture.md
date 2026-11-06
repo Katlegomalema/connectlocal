@@ -21,9 +21,8 @@ flowchart TD
     D --> E[Repository / Data Access Layer]
     E --> F[(PostgreSQL via Supabase Client)]
     D --> G[External Integration Clients]
-    G --> H[Google Maps API]
-    G --> I[PayFast API]
-    G --> J[FCM Push API]
+    G --> H[PayFast API]
+    G --> I[FCM Push API]
 ```
 
 - **Route Layer**: Defines URL paths and HTTP methods, maps to controllers. No logic beyond wiring.
@@ -31,7 +30,7 @@ flowchart TD
 - **Controller Layer**: Parses request, invokes the relevant service, shapes the HTTP response. Contains no business logic or direct DB access.
 - **Service Layer**: Encapsulates business rules (e.g., booking conflict checks, review eligibility). Framework-agnostic and independently unit-testable.
 - **Repository Layer**: Encapsulates all Supabase/PostgreSQL queries behind a consistent interface, isolating the rest of the application from query syntax changes.
-- **Integration Clients**: Thin wrappers around Google Maps, PayFast, and FCM SDKs/HTTP APIs.
+- **Integration Clients**: Thin wrappers around PayFast and FCM SDKs/HTTP APIs. Geospatial search is performed by PostGIS; map tiles are rendered by the Flutter client.
 
 ### 4.2 Folder Structure
 

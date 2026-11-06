@@ -31,16 +31,19 @@ backend/
 ## Getting Started
 See the root [README.md](../README.md) Getting Started section and [`docs/deployment/Environment-Setup.md`](../docs/deployment/Environment-Setup.md) for full setup instructions.
 
-## Key Dependencies (planned)
+## Key Dependencies
 - `express` — HTTP framework
 - `@supabase/supabase-js` — Supabase client (Auth, DB, Storage, Realtime)
-- `zod` or `express-validator` — request validation
+- `zod` — request validation
 - `jsonwebtoken` — JWT verification (Supabase-issued tokens)
 - `pino` — structured logging
+- `pg` — versioned SQL migrations
 - `jest` + `supertest` — testing
+
+Nearby search uses PostGIS and the Flutter client supplies coordinates; the backend has no map vendor or geocoding API key.
 
 ## API Documentation
 All endpoints are documented in [`docs/api-specs/`](../docs/api-specs/). Any new or changed endpoint must be reflected there in the same pull request per [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Testing
-Run `npm run test:unit` and `npm run test:integration`. See [`docs/testing/Unit-Testing.md`](../docs/testing/Unit-Testing.md) and [`docs/testing/Integration-Testing.md`](../docs/testing/Integration-Testing.md) for conventions.
+Run `npm test` for unit and integration suites. Set `DATABASE_URL` and run `npm run migrate` to apply pending SQL migrations. See [`docs/testing/Unit-Testing.md`](../docs/testing/Unit-Testing.md) and [`docs/testing/Integration-Testing.md`](../docs/testing/Integration-Testing.md) for conventions.

@@ -27,16 +27,20 @@ Covers provider profile CRUD, verification submission, service management, and l
 }
 ```
 
+`category` must match an active service-category name; callers may send `categoryId` instead. Address fields are optional. `location` is required. See [`Location-API.md`](./Location-API.md) for map search behavior.
+
 **Response Body (201 Created)**
 ```json
 {
   "success": true,
   "data": {
-    "providerId": "c3e1a9f0-...",
-    "businessName": "Mokoena Plumbing Services",
-    "verificationStatus": "pending"
+    "provider": {
+      "id": "c3e1a9f0-...",
+      "business_name": "Mokoena Plumbing Services",
+      "verification_status": "pending"
+    }
   },
-  "error": null
+  "message": "Provider profile created"
 }
 ```
 
@@ -59,18 +63,19 @@ Covers provider profile CRUD, verification submission, service management, and l
 {
   "success": true,
   "data": {
-    "providerId": "c3e1a9f0-...",
-    "businessName": "Mokoena Plumbing Services",
-    "category": "plumbing",
-    "description": "24/7 residential and commercial plumbing services in Johannesburg.",
-    "averageRating": 4.7,
-    "reviewCount": 132,
-    "verificationStatus": "approved",
-    "services": [
-      { "id": "svc-001", "title": "Blocked Drain Clearing", "price": 450.00, "durationMinutes": 60 }
-    ]
-  },
-  "error": null
+    "provider": {
+      "id": "c3e1a9f0-...",
+      "business_name": "Mokoena Plumbing Services",
+      "business_description": "Residential and commercial plumbing services.",
+      "rating_average": 4.7,
+      "rating_count": 132,
+      "verification_status": "verified",
+      "location": { "latitude": -26.2041, "longitude": 28.0473 },
+      "services": [
+        { "id": "svc-001", "service_name": "Blocked Drain Clearing", "base_price": 450.00, "duration_minutes": 60 }
+      ]
+    }
+  }
 }
 ```
 
@@ -94,7 +99,7 @@ Covers provider profile CRUD, verification submission, service management, and l
 
 **Response Body (200 OK)**
 ```json
-{ "success": true, "data": { "providerId": "c3e1a9f0-...", "updated": true }, "error": null }
+{ "success": true, "data": { "provider": { "id": "c3e1a9f0-..." } }, "message": "Profile updated successfully" }
 ```
 
 **Status Codes**
@@ -119,7 +124,7 @@ Covers provider profile CRUD, verification submission, service management, and l
 }
 ```
 
-**Response Body (202 Accepted)**
+**Response Body (200 OK)**
 ```json
 { "success": true, "data": { "verificationStatus": "pending" }, "error": null }
 ```
@@ -127,13 +132,13 @@ Covers provider profile CRUD, verification submission, service management, and l
 **Status Codes**
 | Code | Meaning |
 |---|---|
-| 202 | Submission received, awaiting admin review |
+| 200 | Submission received, awaiting admin review |
 | 400 | Invalid document type/format |
 
 ---
 
 ### 4.5 Search Providers (Location-Based)
-- **URL:** `/api/v1/providers/search`
+- **URL:** `/api/v1/providers/search` (alias of `/api/v1/search/nearby` for coordinates)
 - **Method:** `GET`
 - **Auth Required:** No
 - **Query Parameters:** `lat`, `lng`, `radiusKm` (default 10), `category`, `minRating`, `maxPrice`, `page`, `pageSize`
@@ -149,7 +154,7 @@ Covers provider profile CRUD, verification submission, service management, and l
       {
         "providerId": "c3e1a9f0-...",
         "businessName": "Mokoena Plumbing Services",
-        "category": "plumbing",
+        "category": "Plumbing",
         "distanceKm": 3.2,
         "averageRating": 4.7,
         "verificationStatus": "approved"
@@ -209,11 +214,10 @@ Covers provider profile CRUD, verification submission, service management, and l
 **Request Body**
 ```json
 {
-  "workingHours": [
-    { "day": "monday", "start": "08:00", "end": "17:00" },
-    { "day": "tuesday", "start": "08:00", "end": "17:00" }
-  ],
-  "blackoutDates": ["2026-12-25", "2026-01-01"]
+  "slots": [
+    { "dayOfWeek": 1, "startTime": "08:00", "endTime": "17:00" },
+    { "dayOfWeek": 2, "startTime": "08:00", "endTime": "17:00" }
+  ]
 }
 ```
 

@@ -27,7 +27,8 @@ Covers local tool installation, environment variable configuration, and initial 
 cd backend
 npm install
 cp .env.example .env
-# Populate .env with Supabase, Google Maps, and PayFast sandbox credentials
+# Populate .env with Supabase, database, and PayFast sandbox credentials
+npm run migrate
 npm run dev
 # API available at http://localhost:4000
 ```
@@ -37,7 +38,7 @@ npm run dev
 cd frontend
 flutter pub get
 cp .env.example .env
-# Populate .env with API_BASE_URL=http://localhost:4000, Supabase, and Google Maps keys
+# Populate .env with API_BASE_URL=http://localhost:4000 and Supabase client settings
 flutter run -d chrome     # Web
 flutter run                # Connected device/emulator
 ```
@@ -62,7 +63,7 @@ Local Supabase provides a fully offline Postgres + Auth + Storage stack, useful 
 |---|---|
 | `flutter pub get` fails on plugin resolution | Ensure Flutter SDK version matches `frontend/pubspec.yaml` constraints; run `flutter upgrade` |
 | Backend fails to connect to Supabase | Verify `SUPABASE_URL` and keys in `.env`; check Supabase project is not paused (free tier auto-pauses after inactivity) |
-| Google Maps not rendering on Android | Confirm `GOOGLE_MAPS_API_KEY` is set in `android/app/src/main/AndroidManifest.xml` per the Flutter Google Maps plugin setup |
+| Map tiles not rendering | Check the Flutter map tile-layer URL, network permissions, and any tile-provider usage policy; no backend map key is involved |
 
 ## 5. Assumptions
 - Developers have administrative rights on their local machine to install the required tools.

@@ -15,17 +15,17 @@ Covers user/provider management, verification review, dispute handling, and anal
 - **URL:** `/api/v1/admin/users`
 - **Method:** `GET`
 - **Auth Required:** Yes (role: `admin`)
-- **Query Parameters:** `role`, `status`, `search`, `page`, `pageSize`
+- **Query Parameters:** `role`, `status`, `page`, `limit`
 
 **Response Body (200 OK)**
 ```json
 {
   "success": true,
   "data": {
-    "results": [
-      { "id": "8b1b6f2e-...", "fullName": "Jane Doe", "email": "jane.doe@example.com", "role": "customer", "status": "active", "createdAt": "2026-02-10T08:15:00Z" }
+    "users": [
+      { "id": "8b1b6f2e-...", "full_name": "Jane Doe", "email": "jane.doe@example.com", "role": "customer", "is_active": true, "deleted_at": null, "created_at": "2026-02-10T08:15:00Z" }
     ],
-    "page": 1, "pageSize": 20, "totalResults": 512
+    "page": 1, "limit": 20, "total": 512, "pages": 26
   },
   "error": null
 }
@@ -39,20 +39,22 @@ Covers user/provider management, verification review, dispute handling, and anal
 
 ---
 
-### 4.2 Suspend / Reinstate User or Provider
-- **URL:** `/api/v1/admin/users/:userId/status`
-- **Method:** `PATCH`
+### 4.2 Update a User Account
+- **URL:** `/api/v1/admin/users/:id`
+- **Method:** `PUT`
 - **Auth Required:** Yes (role: `admin`)
 
 **Request Body**
 ```json
-{ "status": "suspended", "reason": "Repeated policy violations reported by customers" }
+{ "status": "suspended" }
 ```
 
 **Response Body (200 OK)**
 ```json
-{ "success": true, "data": { "id": "8b1b6f2e-...", "status": "suspended" }, "error": null }
+{ "success": true, "data": { "user": { "id": "8b1b6f2e-...", "role": "customer", "status": "suspended", "is_active": false } } }
 ```
+
+Allowed statuses are `active`, `suspended`, and `deactivated`. A deactivated account is soft-deleted; suspended accounts remain undeleted but inactive.
 
 **Status Codes**
 | Code | Meaning |
@@ -63,20 +65,22 @@ Covers user/provider management, verification review, dispute handling, and anal
 ---
 
 ### 4.3 List Pending Provider Verifications
-- **URL:** `/api/v1/admin/providers/verifications`
+- **URL:** `/api/v1/admin/providers/pending`
 - **Method:** `GET`
 - **Auth Required:** Yes (role: `admin`)
-- **Query Parameters:** `status` (default `pending`), `page`, `pageSize`
+- **Query Parameters:** `page`, `limit` (verification status is always `pending`)
+
+Each result includes its provider documents from `provider_documents`, including document type, URL, approval status, and upload time.
 
 **Response Body (200 OK)**
 ```json
 {
   "success": true,
   "data": {
-    "results": [
-      { "providerId": "c3e1a9f0-...", "businessName": "Mokoena Plumbing Services", "documentUrl": "https://storage.connectlocal.dev/verification/c3e1a9f0-doc1.pdf", "submittedAt": "2026-07-20T10:00:00Z" }
+    "providers": [
+      { "id": "c3e1a9f0-...", "business_name": "Mokoena Plumbing Services", "documents": [{ "document_type": "registration", "document_url": "https://storage.connectlocal.dev/verification/c3e1a9f0-doc1.pdf", "approval_status": "pending" }] }
     ],
-    "page": 1, "pageSize": 20, "totalResults": 8
+    "page": 1, "total": 8, "pages": 1
   },
   "error": null
 }
@@ -90,29 +94,21 @@ Covers user/provider management, verification review, dispute handling, and anal
 ---
 
 ### 4.4 Approve / Reject Provider Verification
-- **URL:** `/api/v1/admin/providers/:providerId/verification`
-- **Method:** `PATCH`
+- **URL:** `/api/v1/admin/providers/:id/verify` or `/api/v1/admin/providers/:id/reject`
+- **Method:** `POST`
 - **Auth Required:** Yes (role: `admin`)
 
-**Request Body**
-```json
-{ "decision": "approved" }
-```
-or
-```json
-{ "decision": "rejected", "reason": "Business registration document illegible" }
-```
+The verify and reject routes take no request body. Provider verification status is stored as `verified` or `rejected`.
 
 **Response Body (200 OK)**
 ```json
-{ "success": true, "data": { "providerId": "c3e1a9f0-...", "verificationStatus": "approved" }, "error": null }
+{ "success": true, "message": "Provider verified successfully", "data": { "provider": { "id": "c3e1a9f0-...", "verification_status": "verified" } } }
 ```
 
 **Status Codes**
 | Code | Meaning |
 |---|---|
-| 200 | Decision recorded, provider notified |
-| 400 | Invalid decision value |
+| 200 | Decision recorded |
 
 ---
 
@@ -120,15 +116,19 @@ or
 - **URL:** `/api/v1/admin/disputes`
 - **Method:** `GET`
 - **Auth Required:** Yes (role: `admin`)
+- **Query Parameters:** `status` (`open`, `under_review`, `resolved`, `rejected`), `page`, `limit`
+
+Without a `status` filter, only active disputes (`open` and `under_review`) are returned.
 
 **Response Body (200 OK)**
 ```json
 {
   "success": true,
   "data": {
-    "results": [
-      { "disputeId": "disp-221", "bookingId": "bk-2026-00892", "raisedBy": "customer", "status": "open", "createdAt": "2026-08-06T09:00:00Z" }
-    ]
+    "disputes": [
+      { "id": "disp-221", "booking_id": "bk-2026-00892", "raised_by": "user-1", "status": "open", "created_at": "2026-08-06T09:00:00Z" }
+    ],
+    "total": 1, "page": 1, "pages": 1
   },
   "error": null
 }
@@ -139,25 +139,27 @@ or
 |---|---|
 | 200 | Disputes returned |
 
-- **URL:** `/api/v1/admin/disputes/:disputeId/resolve`
-- **Method:** `PATCH`
+- **URL:** `/api/v1/admin/disputes/:id`
+- **Method:** `PUT`
 - **Auth Required:** Yes (role: `admin`)
 
 **Request Body**
 ```json
-{ "resolution": "refund_issued", "notes": "Full refund processed per customer complaint of no-show." }
+{ "status": "resolved", "resolutionNotes": "Full refund issued after review." }
 ```
 
 **Response Body (200 OK)**
 ```json
-{ "success": true, "data": { "disputeId": "disp-221", "status": "resolved" }, "error": null }
+{ "success": true, "message": "Dispute resolved", "data": { "id": "disp-221", "status": "resolved" } }
 ```
+
+Allowed update statuses are `under_review`, `resolved`, and `rejected`. Terminal decisions require a non-empty `resolutionNotes` value (maximum 5000 characters). Only disputes in `open` or `under_review` can be updated.
 
 **Status Codes**
 | Code | Meaning |
 |---|---|
 | 200 | Dispute resolved |
-| 404 | Dispute not found |
+| 409 | Dispute is missing or no longer active |
 
 ---
 
@@ -165,19 +167,17 @@ or
 - **URL:** `/api/v1/admin/analytics`
 - **Method:** `GET`
 - **Auth Required:** Yes (role: `admin`)
-- **Query Parameters:** `from`, `to` (ISO date range)
 
 **Response Body (200 OK)**
 ```json
 {
   "success": true,
   "data": {
-    "activeUsers": 1204,
-    "activeProviders": 187,
+    "totalUsers": 1204,
+    "totalProviders": 187,
     "totalBookings": 3421,
-    "completedBookings": 2988,
     "totalRevenue": 512340.00,
-    "topCategories": [ { "category": "plumbing", "bookings": 812 }, { "category": "tutoring", "bookings": 654 } ]
+    "averageRating": 4.7
   },
   "error": null
 }
@@ -190,26 +190,9 @@ or
 
 ---
 
-### 4.7 Update Platform Settings
-- **URL:** `/api/v1/admin/settings`
-- **Method:** `PATCH`
-- **Auth Required:** Yes (role: `admin`)
-
-**Request Body**
-```json
-{ "commissionRatePercent": 10, "cancellationWindowHours": 24 }
-```
-
-**Response Body (200 OK)**
-```json
-{ "success": true, "data": { "updated": true }, "error": null }
-```
-
-**Status Codes**
-| Code | Meaning |
-|---|---|
-| 200 | Settings updated |
-| 400 | Invalid setting value |
+### 4.7 Review Moderation
+- `GET /api/v1/admin/reviews` lists reviews with optional `status=visible|hidden`, `page`, and `limit`.
+- `POST /api/v1/admin/reviews/:id/hide` flags a review as hidden and refreshes the provider rating.
 
 ## 5. Assumptions
 - Admin accounts are provisioned manually by the project team (no public admin self-registration).

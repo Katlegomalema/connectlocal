@@ -14,7 +14,7 @@
 
 ConnectLocal is a mobile and web platform that connects customers with nearby, verified local service providers such as plumbers, electricians, tutors, hairdressers, mechanics, and cleaning services. The platform addresses the widespread problem of discovering, vetting, booking, and paying trusted local service providers by combining geolocation search, in-app booking, secure messaging, reviews, and integrated payments in a single ecosystem.
 
-The system is composed of a Flutter cross-platform client, a Node.js/Express REST API backend, and a PostgreSQL database managed through Supabase, with Google Maps used for geolocation and PayFast used for local payment processing.
+The system is composed of a Flutter cross-platform client, a Node.js/Express REST API backend, and a PostgreSQL database managed through Supabase. The client renders maps with Flutter map tooling; the backend stores coordinates and runs nearby search with PostGIS. PayFast handles local payment processing.
 
 This repository contains the full software engineering documentation set (requirements, architecture, database design, API specifications, project management artifacts, testing strategy, and deployment guides) alongside the application source code scaffolding, produced to a standard suitable for academic assessment and industry review.
 
@@ -23,7 +23,7 @@ This repository contains the full software engineering documentation set (requir
 ### Customer Features
 - Registration and login (Email, Phone, Google OAuth)
 - Email and phone verification
-- Nearby provider search via Google Maps
+- Nearby provider search and map markers using client-rendered Flutter maps and PostGIS
 - Provider profile and service browsing
 - Booking creation, rescheduling, and cancellation
 - In-app real-time messaging with providers
@@ -79,9 +79,8 @@ flowchart LR
     end
 
     subgraph External["External Services"]
-        M[Google Maps API]
-        N[PayFast Gateway]
-        O[Push Notification Provider]
+        M[PayFast Gateway]
+        N[Push Notification Provider]
     end
 
     A --> C
@@ -91,11 +90,9 @@ flowchart LR
     E --> J
     F --> J
     G --> J
-    H --> N
+    H --> M
     H --> J
-    I --> O
-    A --> M
-    D --> M
+    I --> N
 ```
 
 See [`docs/architecture/System-Architecture.md`](docs/architecture/System-Architecture.md) for the full architectural specification.
@@ -108,7 +105,7 @@ See [`docs/architecture/System-Architecture.md`](docs/architecture/System-Archit
 | Backend | Node.js + Express | Non-blocking I/O suited to high-concurrency booking/messaging workloads; large ecosystem |
 | Database | PostgreSQL (via Supabase) | ACID-compliant relational integrity for bookings/payments; native PostGIS support for geolocation |
 | Authentication | Supabase Auth | Built-in email/phone/OAuth flows with JWT issuance, reducing custom auth surface area |
-| Maps & Geolocation | Google Maps Platform | Industry-standard geocoding, places, and distance matrix APIs |
+| Maps & Geolocation | Flutter map renderer + PostGIS | Map tiles are rendered client-side; provider coordinates and radius search stay in the API/database |
 | Payments | PayFast | Leading South African payment gateway supporting card, EFT, and instant EFT |
 | Hosting | Supabase (DB/Auth/Storage) + Render (API hosting) | Managed infrastructure reduces DevOps overhead for a small team |
 | CI/CD | GitHub Actions | Native integration with repository, free tier sufficient for project scale |
@@ -154,7 +151,7 @@ connectlocal/
 - Node.js >= 18.x and npm >= 9.x
 - Flutter SDK >= 3.19.x
 - A Supabase project (PostgreSQL + Auth + Storage)
-- Google Maps Platform API key
+- PostGIS enabled in the Supabase project (the backend migration enables it when permitted)
 - PayFast merchant sandbox credentials
 - Git
 
@@ -191,15 +188,12 @@ SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 SUPABASE_ANON_KEY=<anon-key>
 
 # Database (direct connection, for migrations)
-DATABASE_URL=postgresql://user:password@host:5432/connectlocal
+DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database>
 
 # JWT
 JWT_SECRET=<generated-secret>
 JWT_EXPIRY=1h
 REFRESH_TOKEN_EXPIRY=30d
-
-# Google Maps
-GOOGLE_MAPS_API_KEY=<google-maps-key>
 
 # PayFast
 PAYFAST_MERCHANT_ID=<merchant-id>
@@ -217,7 +211,6 @@ Frontend (`frontend/.env`):
 API_BASE_URL=https://api.connectlocal.dev
 SUPABASE_URL=https://<project>.supabase.co
 SUPABASE_ANON_KEY=<anon-key>
-GOOGLE_MAPS_API_KEY=<google-maps-key>
 ```
 
 ## 7. Contribution Guide

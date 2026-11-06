@@ -53,7 +53,7 @@ sequenceDiagram
 - Flutter client sanitizes/escapes any user-generated content rendered as rich text (e.g., review text) to prevent injection into WebViews, if used.
 
 ### 4.5 Third-Party Integration Security
-- **Google Maps API key** is restricted by platform (Android package name/SHA-1, iOS bundle ID, HTTP referrer for web) and by API (only Maps SDK, Places, Geocoding, Distance Matrix enabled).
+- Provider coordinates are written through the authenticated API and queried in PostGIS. The map renderer and tile-provider configuration remain client-side; no map vendor key is required by the backend.
 - **PayFast ITN webhook**: validated via (1) source IP allow-listing against PayFast's published IP ranges, (2) signature/MD5 hash verification, and (3) a server-side confirmation POST back to PayFast before trusting the notification, per PayFast's recommended integration pattern.
 - **Push notifications (FCM)**: server key stored server-side only; device tokens are scoped per-user and revoked on logout.
 

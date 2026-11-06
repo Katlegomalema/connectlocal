@@ -15,7 +15,7 @@ Covers backend deployment to Render, database migration application via Supabase
 - GitHub repository access with `main` branch push/merge rights.
 - Render account linked to the GitHub repository.
 - Supabase project created (staging).
-- Google Maps Platform API key with Maps SDK, Places, Geocoding, and Distance Matrix APIs enabled.
+- PostGIS enabled in the Supabase project for provider-radius search; no server-side map API key is required.
 - PayFast sandbox merchant account.
 
 ### 4.2 Backend Deployment (Render)

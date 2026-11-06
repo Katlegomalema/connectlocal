@@ -48,7 +48,7 @@ testWidgets('BookingStatusBadge shows correct color for confirmed status', (test
 - Frontend business logic (state notifiers, utilities): ≥ 60% line coverage.
 
 ## 5. Assumptions
-- External services (Supabase, Google Maps, PayFast) are never called directly in unit tests; all such calls are mocked.
+- External services (Supabase and PayFast) are never called directly in unit tests; all such calls are mocked. PostGIS query behavior is covered by database integration tests.
 
 ## 6. Constraints
 - UI rendering pixel-perfection is not unit-tested; visual regression testing is out of scope for the academic project.
