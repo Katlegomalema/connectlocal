@@ -4,6 +4,7 @@
  */
 
 import { supabase, supabaseAdmin } from '../config/supabase.js';
+import logger from '../utils/logger.js';
 import * as userRepository from '../repositories/userRepository.js';
 import * as phoneOtpRepository from '../repositories/phoneOtpRepository.js';
 import {
@@ -56,6 +57,89 @@ const authError = (error, fallback) => {
 };
 
 /**
+ * Projects/demos without an email (SMTP) setup: create accounts already confirmed, so sign-up does not
+ * depend on sending a confirmation email. Off by default and never in production.
+ *   AUTH_AUTO_CONFIRM_SIGNUPS=true
+ */
+const autoConfirmSignups = () => process.env.NODE_ENV !== 'production'
+  && (process.env.AUTH_AUTO_CONFIRM_SIGNUPS || 'false').toLowerCase() === 'true';
+
+const SIGNUP_HINT = 'Set up email (SMTP) in Supabase, or for testing set AUTH_AUTO_CONFIRM_SIGNUPS=true in backend/.env.';
+
+/**
+ * Sign-up errors from Supabase Auth -> clear API errors. Before, every unknown error became
+ * 401 "Registration failed", which hid problems in the Supabase settings (email, sign-ups off, trigger).
+ * The real Supabase error is always logged (never the email address or password).
+ */
+const signUpError = (error) => {
+  const code = error?.code || '';
+  const status = error?.status;
+  const message = (error?.message || '').toLowerCase();
+  const devDetail = process.env.NODE_ENV !== 'production' && error?.message ? ` (Supabase: ${error.message})` : '';
+  logger.warn({
+    msg: 'Supabase sign-up failed',
+    supabaseCode: code || undefined,
+    supabaseStatus: status,
+    supabaseMessage: error?.message,
+    supabaseDetails: error?.details,
+    supabaseHint: error?.hint
+  });
+
+  // The checks the user can fix themselves keep their existing meaning (400 / 409 / 429).
+  if (code === 'weak_password' || ['user_already_exists', 'email_exists'].includes(code)
+      || code.startsWith('over_') || status === 429
+      || code === 'email_address_invalid' || code === 'validation_failed') {
+    return authError(error, 'Registration failed');
+  }
+  // Supabase's built-in email service only sends to members of the Supabase project team.
+  if (code === 'email_address_not_authorized') {
+    return new AppError(`We can't send a confirmation email to this address yet. ${SIGNUP_HINT}`, 503, 'SIGNUP_EMAIL_UNAVAILABLE');
+  }
+  if (code === 'signup_disabled' || code === 'email_provider_disabled') {
+    return new AppError('New sign-ups are switched off in Supabase (Authentication settings).', 503, 'SIGNUP_DISABLED');
+  }
+  if (message.includes('error sending') || message.includes('confirmation email')) {
+    return new AppError(`The confirmation email could not be sent. ${SIGNUP_HINT}`, 502, 'EMAIL_SEND_FAILED');
+  }
+  if (message.includes('database error saving new user')) {
+    return new AppError(
+      'The account could not be saved in the database (the sign-up trigger failed, e.g. the email is still in '
+      + 'public.users from an older account).',
+      500,
+      'PROFILE_CREATE_FAILED'
+    );
+  }
+  if (message.includes('invalid api key') || status === 401) {
+    return new AppError('The backend\'s Supabase key is not accepted (check SUPABASE_KEY in backend/.env).', 500, 'AUTH_CONFIG_ERROR');
+  }
+  return new AppError(`Registration failed${devDetail}`, 502, 'SIGNUP_FAILED');
+};
+
+/** Create the Supabase Auth user: a normal sign-up (confirmation email), or already confirmed (see above). */
+const createAuthUser = async (email, password, metadata) => {
+  if (autoConfirmSignups()) {
+    // Server-side only (service role). The database trigger sees email_confirmed_at and sets email_verified.
+    const { data, error } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: metadata
+    });
+    return { user: data?.user ?? null, error };
+  }
+  const redirectTo = emailRedirectUrl();
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: metadata,
+      ...(redirectTo ? { emailRedirectTo: redirectTo } : {})
+    }
+  });
+  return { user: data?.user ?? null, error };
+};
+
+/**
  * Sign-up. The role ("I need a service" = customer, "I offer a service" = provider) goes in the sign-up
  * metadata; the database trigger handle_new_user creates the public.users row and only ever accepts
  * customer or provider (never admin).
@@ -71,32 +155,16 @@ export const registerUser = async (email, password, userData) => {
     throw new ValidationError('Full name must be 2 to 150 characters');
   }
 
-  const redirectTo = emailRedirectUrl();
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: { full_name: fullName, role: userData.role },
-      ...(redirectTo ? { emailRedirectTo: redirectTo } : {})
-    }
-  });
-  if (error) {
-  console.error('SUPABASE REGISTRATION ERROR:', {
-    message: error.message,
-    code: error.code,
-    status: error.status,
-    details: error.details,
-    hint: error.hint
-  });
-
-  throw authError(error, 'Registration failed');
-}
-  if (!data.user) throw new AuthenticationError('Registration failed');
+  // The Supabase error (code, status, message, details, hint) is logged by signUpError.
+  const { user, error } = await createAuthUser(email, password, { full_name: fullName, role: userData.role });
+  if (error) throw signUpError(error);
+  if (!user) throw signUpError({ message: 'Supabase returned no user' });
   // With email confirmation on, Supabase answers an already-registered email with a user that has no
   // identities (and sends nothing).
-  if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+  if (Array.isArray(user.identities) && user.identities.length === 0) {
     throw new ConflictError('This email is already registered');
   }
+  const data = { user };
 
   let profile;
   try {

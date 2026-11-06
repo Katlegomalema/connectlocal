@@ -97,7 +97,10 @@ router.post('/register', limits.register, validateBody(registerSchema), asyncHan
 
   res.status(201).json({
     success: true,
-    message: 'Account created. Please confirm your email address.',
+    // AUTH_AUTO_CONFIRM_SIGNUPS (testing): the account is already confirmed and can log in straight away.
+    message: profile.email_verified
+      ? 'Account created. You can log in now.'
+      : 'Account created. Please confirm your email address.',
     data: {
       userId: user.id,
       email: user.email,
