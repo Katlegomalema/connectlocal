@@ -71,7 +71,17 @@ export const registerUser = async (email, password, userData) => {
       ...(redirectTo ? { emailRedirectTo: redirectTo } : {})
     }
   });
-  if (error) throw authError(error, 'Registration failed');
+  if (error) {
+  console.error('SUPABASE REGISTRATION ERROR:', {
+    message: error.message,
+    code: error.code,
+    status: error.status,
+    details: error.details,
+    hint: error.hint
+  });
+
+  throw authError(error, 'Registration failed');
+}
   if (!data.user) throw new AuthenticationError('Registration failed');
   // With email confirmation on, Supabase answers an already-registered email with a user that has no
   // identities (and sends nothing).
