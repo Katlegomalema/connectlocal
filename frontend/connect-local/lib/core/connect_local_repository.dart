@@ -1,3 +1,4 @@
+import '../features/shared/sa_time.dart';
 import '../features/community/models/models.dart';
 import '../features/shared/photo.dart';
 import 'api_client.dart';
@@ -359,7 +360,7 @@ class ConnectLocalRepository {
     final data = ApiClient.dataOf(await api.post('/bookings', body: {
       'providerId': providerId,
       'serviceId': serviceId,
-      'scheduledStart': scheduledStart.toUtc().toIso8601String(),
+      'scheduledStart': sastWallToUtc(scheduledStart).toIso8601String(), // the slot is SAST, whatever the phone's zone
       if (atBusiness) 'atBusiness': true,
       // A business visit happens at the business; only a house call sends the customer's address and map point.
       if (!atBusiness) 'address': address,
@@ -804,7 +805,7 @@ class ProviderSchedule {
         for (final b in (json['busy'] as List? ?? const []))
           if (b is Map && DateTime.tryParse('${b['start']}') != null && DateTime.tryParse('${b['end']}') != null)
             (
-              start: DateTime.parse('${b['start']}').toLocal(),
+              start: sastWall(DateTime.parse('${b['start']}')),
               minutes: DateTime.parse('${b['end']}').difference(DateTime.parse('${b['start']}')).inMinutes,
             ),
       ],

@@ -1,3 +1,4 @@
+import '../../shared/sa_time.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -522,7 +523,7 @@ class AppState extends ChangeNotifier {
   /// The slots of [day] that have not started yet, each with whether a booking of [minutes] can start
   /// there (false = booked by someone else, or not enough time before closing).
   List<({DateTime start, bool free})> slotsFor(String providerId, DateTime day, int minutes) {
-    final now = DateTime.now();
+    final now = nowSast();
     return [
       for (final start in providerById(providerId).workingHours.slotStarts(day))
         if (start.isAfter(now)) (start: start, free: slotIsFree(providerId, start, minutes)),
@@ -706,7 +707,7 @@ class AppState extends ChangeNotifier {
       List.unmodifiable(_bookings.toList()..sort((a, b) => b.dateTime.compareTo(a.dateTime)));
 
   List<Booking> get todayBookings {
-    final now = DateUtils.dateOnly(DateTime.now());
+    final now = DateUtils.dateOnly(nowSast());
     return providerBookings.where((booking) => DateUtils.dateOnly(booking.dateTime) == now).toList();
   }
 
@@ -758,7 +759,7 @@ class AppState extends ChangeNotifier {
           serviceName: (service['service_name'] as String?) ?? 'Service',
           clientName: (customer['full_name'] as String?) ?? '',
           customerId: json['customer_id'] as String?,
-          dateTime: DateTime.tryParse((json['scheduled_start'] as String?) ?? '')?.toLocal() ?? DateTime.now(),
+          dateTime: sastWall(DateTime.tryParse((json['scheduled_start'] as String?) ?? '') ?? DateTime.now()),
           price: _num(json['total_amount']),
           hours: (json['quantity'] as num?)?.toInt() ?? 1,
           packageName: json['package_name_at_booking'] as String?,

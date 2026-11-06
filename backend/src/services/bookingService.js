@@ -261,6 +261,16 @@ export const acceptBooking = async (actor, bookingId) => {
   if (booking.booking_fee_status !== 'paid') {
     throw new ConflictError('The customer has not paid the booking fee yet');
   }
+  // The time may have been taken meanwhile (e.g. this request waited unpaid longer than its hold).
+  const gapMs = BOOKING_GAP_MINUTES * 60000;
+  if (booking.scheduled_start && booking.scheduled_end && await bookingRepository.hasFirmConflict(
+    booking.provider_id,
+    new Date(new Date(booking.scheduled_start).getTime() - gapMs).toISOString(),
+    new Date(new Date(booking.scheduled_end).getTime() + gapMs).toISOString(),
+    booking.id
+  )) {
+    throw new ConflictError('You already have an accepted booking at this time. Decline this request instead.');
+  }
   // CLAUDE.md: providers need bank details before accepting bookings (so the payout has somewhere to go).
   if (!(await payoutService.hasPayoutDetails(booking.provider_id))) {
     throw new ConflictError('Add your bank details (Payout details) before accepting bookings');
@@ -397,11 +407,17 @@ export const startBooking = async (actor, bookingId, pin) => {
   }
   if (!booking.arrival_pin_hash) throw new ConflictError('This booking has no arrival PIN yet');
 
-  // The attempt counter is part of the update condition, so two parallel guesses cannot both count as one.
-  if (!hashesMatch(booking.arrival_pin_hash, hashArrivalPin(booking.id, pin))) {
+  // Use up a try BEFORE comparing. The count we read is part of the update condition, so of many guesses sent
+  // at the same moment only one gets this try; the others are refused (no burst of free guesses).
+  try {
     await bookingRepository.updateBooking(bookingId, ['accepted'], {
       arrival_pin_attempts: attempts + 1
     }, { arrival_pin_attempts: attempts });
+  } catch (error) {
+    if (error instanceof ConflictError) throw new ConflictError('Another PIN check is running. Try again in a moment.');
+    throw error;
+  }
+  if (!hashesMatch(booking.arrival_pin_hash, hashArrivalPin(booking.id, pin))) {
     const left = ARRIVAL_PIN_MAX_ATTEMPTS - attempts - 1;
     throw new ValidationError(left > 0 ? `Wrong PIN. ${left} tries left.` : 'Wrong PIN. No tries left.');
   }
@@ -410,7 +426,7 @@ export const startBooking = async (actor, bookingId, pin) => {
     status: 'in_progress',
     status_changed_by: actor.id,
     arrival_pin_verified_at: new Date().toISOString()
-  }, { arrival_pin_attempts: attempts });
+  }, { arrival_pin_attempts: attempts + 1 });
   await notifyBookingEvent('started', bookingId);
   return publicBooking(updated, actor);
 };

@@ -163,6 +163,21 @@ export const listBusyTimes = async (providerId, fromIso, toIso) => {
   return data || [];
 };
 
+/** True when an ACCEPTED or IN-PROGRESS booking of this provider overlaps [from, to) (other than [exclude]). */
+export const hasFirmConflict = async (providerId, fromIso, toIso, excludeBookingId) => {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('id')
+    .eq('provider_id', providerId)
+    .in('status', ['accepted', 'in_progress'])
+    .lt('scheduled_start', toIso)
+    .gt('scheduled_end', fromIso)
+    .neq('id', excludeBookingId)
+    .limit(1);
+  if (error) throw error;
+  return Boolean(data?.length);
+};
+
 export const createBooking = async (bookingData) => {
   const { data, error } = await supabase
     .from('bookings')
@@ -216,6 +231,7 @@ export const listBookings = async ({
 
 export default {
   listBusyTimes,
+  hasFirmConflict,
   findPendingDuplicate,
   getProviderAvailability,
   getBookingById,

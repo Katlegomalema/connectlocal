@@ -38,18 +38,18 @@ void main() {
     await repo.startPayment('booking-2', 'booking_fee');
 
     expect(calls, 5, reason: 'a POST is never retried automatically');
-    expect(keys[0], matches(RegExp(r'^[0-9a-f]{32}$')));
+    expect(keys[0], 'bk-booking-1-booking_fee');
     expect(keys.sublist(0, 3).toSet(), hasLength(1), reason: 'same key for every try of the same payment');
     expect(keys[3], isNot(keys[0]), reason: 'the balance is another payment');
     expect(keys[4], isNot(keys[0]), reason: 'another booking');
     expect(third.paymentId, first.paymentId);
   });
 
-  test('the key survives the app being closed, and is forgotten once paid', () async {
-    final before = await PaymentKeys.keyFor('booking-1', 'booking_fee');
-    expect(await PaymentKeys.keyFor('booking-1', 'booking_fee'), before);
-    await PaymentKeys.forget('booking-1', 'booking_fee');
-    expect(await PaymentKeys.keyFor('booking-1', 'booking_fee'), isNot(before));
+  test('the key is the same on every device and after the app was closed (nothing stored)', () async {
+    expect(await PaymentKeys.keyFor('booking-1', 'booking_fee'), await PaymentKeys.keyFor('booking-1', 'booking_fee'));
+    expect(await PaymentKeys.keyFor('booking-1', 'booking_fee'), isNot(await PaymentKeys.keyFor('booking-1', 'balance')));
+    expect(RegExp(r'^[A-Za-z0-9_-]{8,100}$').hasMatch(await PaymentKeys.keyFor('6f1c0f3e-1d2b-4c5a-9e8f-0a1b2c3d4e5f', 'booking_fee')),
+        isTrue, reason: 'the server accepts letters, digits, - and _ (8-100)');
   });
 
   test('an already-paid answer is reported as paid (no checkout to open)', () async {

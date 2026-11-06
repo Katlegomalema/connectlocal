@@ -235,6 +235,15 @@ Restart the backend. Without this, the browser blocks every API call from the Ne
 
 Supabase sends both emails.
 
+- **Before the demo: set up your own email sender.** Supabase's built-in sender only allows a few emails per
+  hour, so the 3rd sign-up in an hour gets "We cannot send more confirmation emails right now". Supabase →
+  **Authentication → Emails → SMTP Settings**: turn on custom SMTP (e.g. SendGrid: host `smtp.sendgrid.net`,
+  port 587, user `apikey`, password = a SendGrid API key, sender = a verified address). Then raise
+  **Authentication → Rate Limits → emails per hour**.
+- **Password rule:** Supabase → **Authentication → Providers → Email → Password requirements** must be
+  "Lowercase, uppercase letters and digits" (8 characters minimum), the same rule as the app and API. If it still
+  asks for symbols, sign-up with e.g. `Longpass11` fails with "add a symbol".
+
 - **Confirm email:** the link opens `EMAIL_REDIRECT_URL` (or the first `FRONTEND_URL`). Set it to the app site.
 - **Reset password:**
   1. Set `PASSWORD_RESET_REDIRECT_URL` to the app site, e.g. `https://<your-app>.netlify.app/`.
@@ -257,6 +266,7 @@ npm run lint
 npm test
 PORT=3005 node server.js &                               # a second server just for the next line
 node --env-file=.env scripts/e2e-booking-flow.mjs 3005   # whole flow against the real database; cleans up after itself
+API=http://localhost:3005 bash scripts/smoke-test.sh     # the same main flow with plain curl, PASS/FAIL per step
 kill %1
 
 # Flutter
@@ -266,7 +276,10 @@ flutterd test
 ```
 
 The end-to-end script creates temporary `cl-curltest-…@connectlocal.test` users and deletes them at the
-end. It should finish with `ALL PASSED` and `temporary test users left: 0`.
+end. It should finish with `ALL PASSED` and `temporary test users left: 0`. The smoke test creates
+`cl-smoke-…@mailinator.com` users (sign-up checks that the domain receives mail; change it with
+`SMOKE_EMAIL_DOMAIN`), deletes them at the end and exits 0 only when every step passed. `PAY=real` lets you pay
+the booking fee yourself in the PayFast sandbox instead of simulating the ITN. Results: `TEST_REPORT.md`.
 
 ---
 

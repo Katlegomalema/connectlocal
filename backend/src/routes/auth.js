@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validateBody } from '../middleware/validation.js';
 import { verifyToken } from '../middleware/auth.js';
+import { limits } from '../middleware/rateLimit.js';
 import * as authService from '../services/authService.js';
 import * as userService from '../services/userService.js';
 import { PHONE_OTP_TTL_MS } from '../config/business.js';
@@ -84,7 +85,7 @@ const tokens = (session) => ({
 const noStore = (res) => res.set('Cache-Control', 'no-store');
 
 // ---- routes ----------------------------------------------------------------------------------------------
-router.post('/register', validateBody(registerSchema), asyncHandler(async (req, res) => {
+router.post('/register', limits.register, validateBody(registerSchema), asyncHandler(async (req, res) => {
   const body = req.validatedBody;
   const user = await authService.registerUser(body.email, body.password, {
     fullName: body.fullName,
@@ -107,7 +108,7 @@ router.post('/register', validateBody(registerSchema), asyncHandler(async (req, 
   });
 }));
 
-router.post('/login', validateBody(loginSchema), asyncHandler(async (req, res) => {
+router.post('/login', limits.login, validateBody(loginSchema), asyncHandler(async (req, res) => {
   const { user, session } = await authService.loginUser(req.validatedBody.email, req.validatedBody.password);
   noStore(res);
   res.status(200).json({
@@ -177,12 +178,12 @@ const verifyOtp = asyncHandler(async (req, res) => {
 });
 
 router.post('/phone/request-otp', verifyToken, validateBody(requestOtpSchema), requestOtp);
-router.post('/phone/verify-otp', verifyToken, validateBody(verifyOtpSchema), verifyOtp);
+router.post('/phone/verify-otp', verifyToken, limits.otpVerify, validateBody(verifyOtpSchema), verifyOtp);
 // Older paths, kept as aliases.
 router.post('/phone/otp', verifyToken, validateBody(requestOtpSchema), requestOtp);
-router.post('/verify-phone', verifyToken, validateBody(verifyOtpSchema), verifyOtp);
+router.post('/verify-phone', verifyToken, limits.otpVerify, validateBody(verifyOtpSchema), verifyOtp);
 
-router.post('/password-reset', validateBody(emailOnlySchema), asyncHandler(async (req, res) => {
+router.post('/password-reset', limits.passwordReset, validateBody(emailOnlySchema), asyncHandler(async (req, res) => {
   await authService.sendPasswordResetEmail(req.validatedBody.email);
   res.status(200).json({
     success: true,
@@ -190,7 +191,7 @@ router.post('/password-reset', validateBody(emailOnlySchema), asyncHandler(async
   });
 }));
 
-router.post('/reset-password', validateBody(resetPasswordSchema), asyncHandler(async (req, res) => {
+router.post('/reset-password', limits.passwordReset, validateBody(resetPasswordSchema), asyncHandler(async (req, res) => {
   await authService.updatePasswordWithToken(req.validatedBody.password, req.validatedBody.token);
   res.status(200).json({ success: true, message: 'Password has been reset successfully' });
 }));

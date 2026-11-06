@@ -1,28 +1,11 @@
-import 'dart:math';
-
-import 'package:shared_preferences/shared_preferences.dart';
-
-/// One Idempotency-Key per booking and payment kind (booking fee / balance), kept on the device until that
-/// payment is paid. Every "start payment" for it sends the same key, also after the app was closed, so the
-/// server always answers with the same payment and the customer is never charged twice.
+/// The Idempotency-Key for "start payment": derived from the booking and the payment kind (booking fee /
+/// balance), so every try, on every device, after the app was closed, sends the same key and the server
+/// answers with the same payment. Nothing is stored on the device (CLAUDE.md: only sign-in tokens are).
 class PaymentKeys {
   PaymentKeys._();
 
-  static String _name(String bookingId, String purpose) => 'cl_payment_key_${bookingId}_$purpose';
+  static Future<String> keyFor(String bookingId, String purpose) async => 'bk-$bookingId-$purpose';
 
-  static Future<String> keyFor(String bookingId, String purpose) async {
-    final prefs = await SharedPreferences.getInstance();
-    final existing = prefs.getString(_name(bookingId, purpose));
-    if (existing != null && existing.isNotEmpty) return existing;
-    final random = Random.secure();
-    final key = List.generate(16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
-    await prefs.setString(_name(bookingId, purpose), key);
-    return key;
-  }
-
-  /// The payment is paid: the key is not needed any more.
-  static Future<void> forget(String bookingId, String purpose) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_name(bookingId, purpose));
-  }
+  /// Kept for the callers; nothing to forget because nothing is stored.
+  static Future<void> forget(String bookingId, String purpose) async {}
 }

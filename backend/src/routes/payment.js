@@ -9,6 +9,8 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken, requireRole } from '../middleware/auth.js';
 import { validateBody, validateUuidParam } from '../middleware/validation.js';
 import * as paymentService from '../services/paymentService.js';
+import { ConflictError } from '../utils/errors.js';
+import { limits } from '../middleware/rateLimit.js';
 
 const router = express.Router();
 router.param('id', validateUuidParam);
@@ -22,7 +24,7 @@ const confirmSchema = z.object({ paymentId: z.string().min(1) }).strict();
  * POST /api/v1/payments/intent
  * Create a payment intent for a booking
  */
-router.post('/intent', verifyToken, validateBody(intentSchema), asyncHandler(async (req, res) => {
+router.post('/intent', verifyToken, limits.paymentIntent, validateBody(intentSchema), asyncHandler(async (req, res) => {
   // Idempotency-Key (header): the app sends the same key when it retries, so it gets the same payment.
   const { created, ...payment } = await paymentService.createPaymentIntent(
     req.user,
@@ -110,14 +112,25 @@ router.get('/cancel', (req, res) => page(
   '<h1>Payment cancelled</h1><p>Nothing was charged. Go back to the ConnectLocal app to try again.</p>'
 ));
 
-router.post('/payfast/itn', asyncHandler(async (req, res) => {
+/**
+ * PayFast ITN. Answers 200 when the notification was handled or can never be (wrong amount, not from
+ * PayFast). Any other problem (database down, validate call timed out) answers 500, so PayFast sends it again
+ * instead of leaving a charged customer with an unpaid booking.
+ */
+const handleItn = (label) => asyncHandler(async (req, res) => {
   try {
     await paymentService.processPayFastItn(req.body, sourceAddresses(req));
   } catch (error) {
-    req.log?.error({ err: error }, 'PayFast ITN processing failed');
+    req.log?.error({ err: error }, `${label} processing failed`);
+    if (!(error instanceof ConflictError)) {
+      res.status(500).type('text/plain').send('RETRY');
+      return;
+    }
   }
   res.status(200).type('text/plain').send('OK');
-}));
+});
+
+router.post('/payfast/itn', handleItn('PayFast ITN'));
 
 /**
  * GET /api/v1/payments/:id
@@ -166,13 +179,6 @@ router.post('/:id/refund', verifyToken, requireRole('admin'), asyncHandler(async
  * POST /api/v1/payments/webhook
  * Handle payment gateway webhooks
  */
-router.post('/webhook', asyncHandler(async (req, res) => {
-  try {
-    await paymentService.processPayFastItn(req.body, sourceAddresses(req));
-  } catch (error) {
-    req.log?.error({ err: error }, 'PayFast webhook processing failed');
-  }
-  res.status(200).type('text/plain').send('OK');
-}));
+router.post('/webhook', handleItn('PayFast webhook'));
 
 export default router;

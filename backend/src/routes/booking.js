@@ -9,13 +9,15 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken } from '../middleware/auth.js';
 import { validateBody, validateUuidParam } from '../middleware/validation.js';
 import * as bookingService from '../services/bookingService.js';
-import { addressSchema, pinSchema, textSchema } from '../utils/validators.js';
+import {
+  addressSchema, futureDateTimeSchema, pinSchema, textSchema
+} from '../utils/validators.js';
 
 const router = express.Router();
 const createBookingSchema = z.object({
   providerId: z.string().uuid(),
   serviceId: z.string().uuid(),
-  scheduledStart: z.string().min(1),
+  scheduledStart: futureDateTimeSchema.transform((d) => d.toISOString()),
   packageId: z.string().uuid().optional(), // for package-priced services
   hours: z.number().int().min(1).max(24)
     .optional(), // for hourly services
@@ -35,7 +37,7 @@ const createBookingSchema = z.object({
 const startSchema = z.object({ pin: pinSchema }).strict();
 
 router.param('id', validateUuidParam);
-const rescheduleSchema = z.object({ scheduledStart: z.string().min(1) });
+const rescheduleSchema = z.object({ scheduledStart: futureDateTimeSchema.transform((d) => d.toISOString()) });
 const reasonSchema = z.object({ reason: textSchema(1000, { label: 'The reason' }).optional() });
 const respondSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('accept') }).strict(),

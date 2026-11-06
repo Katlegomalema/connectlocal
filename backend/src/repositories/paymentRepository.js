@@ -11,7 +11,7 @@ export const getBookingById = async (bookingId) => {
     .from('bookings')
     // Everything the payment flow reads: fee/balance amounts and their payment state.
     .select('id, customer_id, provider_id, status, total_amount, booking_fee_amount, booking_fee_status, '
-      + 'balance_amount, balance_status, balance_payment_method')
+      + 'balance_amount, balance_status, balance_payment_method, scheduled_start, scheduled_end')
     .eq('id', bookingId)
     .maybeSingle();
 

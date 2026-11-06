@@ -8,7 +8,8 @@
 --      uq_payments_one_paid_per_purpose, 20261104230000.)
 --   3. One receipt per payment.
 --   4. apply_payfast_payment(): marks the payment paid, writes the receipt and updates the booking in ONE
---      transaction, with the payment row locked, so a repeated ITN can never apply twice.
+--      transaction, with the payment row locked, so a repeated ITN can never apply twice. A card payment
+--      for a part already paid another way (cash) is reported back so the backend refunds it.
 --      payments.transaction_reference (= PayFast's pf_payment_id) is already unique.
 -- =====================================================================================================
 
@@ -55,6 +56,15 @@ begin
   end if;
 
   select status into v_booking_status from public.bookings where id = v_payment.booking_id for update;
+
+  -- The same part was already paid another way (e.g. cash) while this checkout was open: the backend refunds
+  -- this card payment instead of recording a second one.
+  if exists (select 1 from public.payments
+              where booking_id = v_payment.booking_id and purpose = v_payment.purpose
+                and payment_status = 'paid' and id <> p_payment_id) then
+    return jsonb_build_object('outcome', 'already_paid_other_way', 'booking_id', v_payment.booking_id,
+                              'purpose', v_payment.purpose);
+  end if;
 
   update public.payments
      set payment_status = 'paid',

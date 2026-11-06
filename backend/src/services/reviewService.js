@@ -5,6 +5,8 @@
 
 import * as reviewRepository from '../repositories/reviewRepository.js';
 import { notifyBookingEvent } from './bookingNotifier.js';
+import * as notificationService from './notificationService.js';
+import * as providerRepository from '../repositories/providerRepository.js';
 import { AuthorizationError, ConflictError, ValidationError } from '../utils/errors.js';
 
 const parsePagination = (pageValue, limitValue) => {
@@ -119,11 +121,22 @@ export const hideReview = async (reviewId) => {
   return review;
 };
 
+/**
+ * Someone reports a review. It stays visible: the admins are told and decide (POST /admin/reviews/:id/hide).
+ * (Before, one report hid the review straight away, so a provider could hide every bad review.)
+ */
 export const reportReview = async (actor, reviewId) => {
   if (!actor?.id) throw new AuthorizationError('Authentication required');
-  const review = await reviewRepository.reportReview(reviewId);
-  await reviewRepository.refreshProviderRating(review.provider_id);
-  return review;
+  const review = await reviewRepository.getReviewById(reviewId);
+  const adminIds = await providerRepository.listAdminUserIds();
+  await Promise.all(adminIds.map((adminId) => notificationService.sendInAppNotification(adminId, {
+    type: 'review',
+    title: 'Review reported',
+    body: 'A review was reported. Check it in the admin site and hide it if it breaks the rules.',
+    relatedEntityType: 'review',
+    relatedEntityId: review.id
+  }).catch(() => null)));
+  return { id: review.id, reported: true };
 };
 
 export default {

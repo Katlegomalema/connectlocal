@@ -527,7 +527,9 @@ export const deactivatePackage = async (actor, providerId, serviceId, packageId)
 };
 
 export const getAvailability = async (providerId) => {
-  await providerRepository.getProviderById(providerId);
+  const provider = await providerRepository.getProviderById(providerId);
+  // Public route: only approved, active businesses (same as their services).
+  if (provider.verification_status !== 'verified' || !provider.is_active) throw new NotFoundError('Provider not found');
   const [weekly, timeOff] = await Promise.all([
     providerRepository.getProviderAvailability(providerId),
     providerRepository.listProviderTimeOff(providerId)

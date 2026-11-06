@@ -1,3 +1,4 @@
+import '../../shared/sa_time.dart';
 import 'package:flutter/material.dart';
 
 import '../../shared/validators.dart';
@@ -49,7 +50,7 @@ class _BookingScreenState extends State<BookingScreen> {
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December',
   ];
-  final DateTime _today = DateUtils.dateOnly(DateTime.now());
+  final DateTime _today = DateUtils.dateOnly(nowSast()); // booking days are South African days
   late DateTime _date = _today;
 
   /// The booked time slot (start). Null until the customer picks a free slot.
@@ -210,7 +211,7 @@ class _BookingScreenState extends State<BookingScreen> {
       return;
     }
     // Checked again now: the slot may have been taken or passed since it was shown.
-    if (!_slot!.isAfter(DateTime.now()) ||
+    if (!_slot!.isAfter(nowSast()) ||
         !AppScope.read(context).slotIsFree(widget.providerId, _slot!, _blockedMinutes)) {
       setState(() => _slot = null);
       ScaffoldMessenger.of(context).showSnackBar(
