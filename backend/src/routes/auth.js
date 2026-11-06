@@ -21,7 +21,9 @@ import { verifyToken } from '../middleware/auth.js';
 import * as authService from '../services/authService.js';
 import * as userService from '../services/userService.js';
 import { PHONE_OTP_TTL_MS } from '../config/business.js';
-import { emailSchema, passwordSchema, phoneSchema } from '../utils/validators.js';
+import {
+  emailSchema, otpSchema, passwordSchema, personNameSchema, phoneSchema
+} from '../utils/validators.js';
 
 const router = express.Router();
 
@@ -29,13 +31,10 @@ const router = express.Router();
 const registerSchema = z.object({
   email: emailSchema,
   password: passwordSchema,
-  fullName: z.string().trim().min(2).max(150)
-    .optional(),
+  fullName: personNameSchema.optional(),
   // Older clients send first/last name separately.
-  firstName: z.string().trim().min(1).max(75)
-    .optional(),
-  lastName: z.string().trim().min(1).max(75)
-    .optional(),
+  firstName: personNameSchema.optional(),
+  lastName: personNameSchema.optional(),
   // "I need a service" = customer, "I offer a service" = provider. Never admin.
   role: z.enum(['customer', 'provider']).default('customer')
 }).refine((body) => body.fullName || (body.firstName && body.lastName), {
@@ -53,7 +52,7 @@ const requestOtpSchema = z.object({
   phone: phoneSchema.optional() // older name
 }).refine((body) => body.phoneNumber || body.phone, { message: 'phoneNumber is required', path: ['phoneNumber'] });
 const verifyOtpSchema = z.object({
-  otp: z.string().regex(/^\d{6}$/, 'The code must be 6 digits'),
+  otp: otpSchema,
   // Ignored: the number is the one the code was sent to.
   phoneNumber: z.string().optional(),
   phone: z.string().optional()

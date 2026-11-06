@@ -58,7 +58,7 @@ void main() {
     expect(RegisterScreenRules.problem('longpass1!'), contains('capital'));
     expect(RegisterScreenRules.problem('LONGPASS1!'), contains('small'));
     expect(RegisterScreenRules.problem('Longpass!!'), contains('number'));
-    expect(RegisterScreenRules.problem('Longpass11'), contains('symbol'));
+    expect(RegisterScreenRules.problem('Longpass11'), isNull, reason: 'no symbol needed: 8+, capital, small, number');
     expect(RegisterScreenRules.problem('Longpass1!'), isNull);
   });
 

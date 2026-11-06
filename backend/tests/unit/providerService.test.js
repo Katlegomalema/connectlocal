@@ -83,7 +83,7 @@ describe('Provider service', () => {
     repository.getServiceCategoryByName.mockResolvedValue({ id: 'category-1', name: 'Plumbing' });
     await expect(providerService.registerProvider({ id: 'user-1', role: 'provider' }, {
       businessName: 'Drain Repair', registrationNumber: '2019-123456-07', category: 'Plumbing'
-    })).rejects.toThrow('YYYY/NNNNNN/TT');
+    })).rejects.toThrow('Use the format 2019/123456/07');
     expect(repository.createProvider).not.toHaveBeenCalled();
   });
 

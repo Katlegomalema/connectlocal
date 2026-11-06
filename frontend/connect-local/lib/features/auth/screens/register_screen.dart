@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/validators.dart';
+
 import '../../community/state/app_state.dart';
 import '../../shared/app_config.dart';
 import '../theme/app_colors.dart';
@@ -58,14 +60,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  /// Same rules as the backend, so the person sees them before sending.
-  static String? passwordProblem(String password) {
-    if (password.length < 8) return 'Password must be at least 8 characters';
-    if (!RegExp(r'[A-Z]').hasMatch(password)) return 'Add at least one capital letter (A-Z)';
-    if (!RegExp(r'[a-z]').hasMatch(password)) return 'Add at least one small letter (a-z)';
-    if (!RegExp(r'[0-9]').hasMatch(password)) return 'Add at least one number (0-9)';
-    if (!RegExp(r'[^A-Za-z0-9]').hasMatch(password)) return 'Add at least one symbol, e.g. ! @ # ?';
-    return null;
+  /// Same rules as the backend (shared/validators.dart), so the person sees them before sending.
+  static String? passwordProblem(String password) => Validators.password(password);
+
+  @override
+  void initState() {
+    super.initState();
+    // Each box is checked as soon as the person leaves it (not only on SIGN UP).
+    _nameFocus.addListener(() {
+      if (!_nameFocus.hasFocus && _name.text.isNotEmpty) setState(() => _nameError = Validators.personName(_name.text));
+    });
+    _emailFocus.addListener(() {
+      if (!_emailFocus.hasFocus && _email.text.isNotEmpty) setState(() => _emailError = Validators.email(_email.text));
+    });
+    _passwordFocus.addListener(() {
+      if (!_passwordFocus.hasFocus && _password.text.isNotEmpty) {
+        setState(() => _passwordError = passwordProblem(_password.text));
+      }
+    });
   }
 
   /// Live check of the confirmation: once it is as long as the password, say straight away whether they
@@ -112,10 +124,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final password = _password.text;
 
     setState(() {
-      _nameError = name.length < 2 ? 'Please enter your full name' : null;
-      _emailError = email.isEmpty
-          ? 'Please enter your email address'
-          : (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email) ? 'Please enter a valid email address' : null);
+      _nameError = name.isEmpty ? 'Please enter your full name' : Validators.personName(name);
+      _emailError = email.isEmpty ? 'Please enter your email address' : Validators.email(email);
       _passwordError = passwordProblem(password);
       _confirmError = _confirm.text.isEmpty
           ? 'Please type your password again'

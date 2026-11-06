@@ -23,14 +23,17 @@ const confirmSchema = z.object({ paymentId: z.string().min(1) }).strict();
  * Create a payment intent for a booking
  */
 router.post('/intent', verifyToken, validateBody(intentSchema), asyncHandler(async (req, res) => {
-  const payment = await paymentService.createPaymentIntent(
+  // Idempotency-Key (header): the app sends the same key when it retries, so it gets the same payment.
+  const { created, ...payment } = await paymentService.createPaymentIntent(
     req.user,
     req.validatedBody.bookingId,
-    req.validatedBody.purpose
+    req.validatedBody.purpose,
+    req.get('Idempotency-Key') || null
   );
-  res.status(201).json({
+  res.set('Cache-Control', 'no-store');
+  res.status(created ? 201 : 200).json({
     success: true,
-    message: 'Payment intent created',
+    message: created ? 'Payment intent created' : 'Existing payment returned (not charged again)',
     data: payment
   });
 }));

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../shared/validators.dart';
 import '../../shared/photo.dart';
 import '../../shared/photo_picker.dart';
 import '../../shared/photo_viewer.dart';
@@ -49,11 +51,11 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
     _photos = List.of(s?.photos ?? const <PhotoRef>[]);
     if (s != null) {
       _type = s.pricingType;
-      if (s.pricingType != PricingType.packages) _priceCtrl.text = '${s.price}';
+      if (s.pricingType != PricingType.packages) _priceCtrl.text = _priceText(s.price);
     }
     if (s != null && s.hasPackages) {
       for (final k in s.packages) {
-        _packageRows.add(_PackageRow(k.name, '${k.price}', k.description));
+        _packageRows.add(_PackageRow(k.name, _priceText(k.price), k.description));
       }
     }
     if (_packageRows.isEmpty) _packageRows.add(_PackageRow('', '', ''));
@@ -113,11 +115,11 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
         ),
       );
 
-  String? _requiredValidator(String? v) =>
-      (v == null || v.trim().isEmpty) ? 'Required' : null;
 
-  int? _parsePrice() =>
-      int.tryParse(_priceCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''));
+  /// "349.99" -> 349.99 (before, every non-digit was dropped and 349.99 became R34 999).
+  double? _parsePrice() => Validators.price(_priceCtrl.text) == null
+      ? double.parse(_priceCtrl.text.trim().replaceAll(' ', '').replaceAll(',', '.'))
+      : null;
 
   Future<void> _addPhotos() async {
     final room = _maxPhotos - _photos.length;
@@ -136,7 +138,8 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
 
   Future<void> _publish() async {
     if (_saving) return;
-    if (!_formKey.currentState!.validate()) return;
+    // Errors show under their fields; scroll to the first one so the person sees why nothing was saved.
+    if (!validateAndReveal(_formKey)) return;
     final app = AppScope.read(context);
     final messenger = ScaffoldMessenger.of(context);
     final packages = <ServicePackage>[];
@@ -145,8 +148,12 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
         final price = r.price;
         if (r.name.text.trim().isEmpty && price == null) continue;
         if (r.name.text.trim().isEmpty || price == null || price <= 0) {
-          messenger.showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
-              content: Text('Each package needs a name and a price')));
+          final priceProblem = Validators.price(r.priceText.text);
+          messenger.showSnackBar(SnackBar(
+              duration: const Duration(seconds: 4),
+              content: Text(r.name.text.trim().isEmpty
+                  ? 'Each package needs a name'
+                  : 'Package "${r.name.text.trim()}": ${priceProblem ?? 'enter a price'}')));
           return;
         }
         packages.add(ServicePackage(
@@ -221,14 +228,15 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                   ),
                 ),
                 _label('Service Name', required: true),
-                TextFormField(
+                ValidatedField(
                   controller: _nameCtrl,
                   style: const TextStyle(fontSize: 14),
                   decoration: _decoration('e.g. Men\u2019s haircut, Geyser repair, Maths lesson'),
                   validator: (v) {
-                    if (v == null || v.trim().isEmpty) return 'Required';
+                    final problem = Validators.text(v, min: 2, max: 100, label: 'The service name');
+                    if (problem != null) return problem;
                     final business = AppScope.read(context).activeProvider.name;
-                    if (v.trim().toLowerCase() == business.trim().toLowerCase()) {
+                    if ((v ?? '').trim().toLowerCase() == business.trim().toLowerCase()) {
                       return 'Use the name of the service (e.g. "Men\u2019s haircut"), not your business name';
                     }
                     return null;
@@ -276,18 +284,13 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                 ),
                 if (!_usePackages) ...[
                   _label(_type == PricingType.fixed ? 'Price (R)' : 'Price (R/hour)', required: true),
-                  TextFormField(
+                  ValidatedField(
                     key: ValueKey('price-${_type.name}'),
                     controller: _priceCtrl,
-                    keyboardType: TextInputType.number,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     style: const TextStyle(fontSize: 14),
-                    decoration: _decoration('350', prefixText: 'R '),
-                    validator: (v) {
-                      if (_usePackages) return null;
-                      final p = _parsePrice();
-                      if (p == null || p <= 0) return 'Enter a valid price';
-                      return null;
-                    },
+                    decoration: _decoration('350 or 349.99', prefixText: 'R '),
+                    validator: (v) => _usePackages ? null : Validators.price(v),
                   ),
                 ] else ...[
                   const Padding(
@@ -336,7 +339,7 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                           const SizedBox(height: 10),
                           TextField(
                             controller: _packageRows[i].priceText,
-                            keyboardType: TextInputType.number,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
                             style: const TextStyle(fontSize: 14),
                             decoration: _decoration('Price', prefixText: 'R '),
                           ),
@@ -360,12 +363,12 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                     ),
                 ],
                 _label('What does this service include?', required: true),
-                TextFormField(
+                ValidatedField(
                   controller: _descCtrl,
                   maxLines: 4,
                   style: const TextStyle(fontSize: 14),
                   decoration: _decoration('Describe this service only, e.g. what the customer gets...'),
-                  validator: _requiredValidator,
+                  validator: (v) => Validators.text(v, min: 10, max: 2000, label: 'The description'),
                 ),
                 _label('Photos'),
                 InkWell(
@@ -429,7 +432,8 @@ class _AddServiceScreenState extends State<AddServiceScreen> {
                 const SizedBox(height: 28),
                 PrimaryButton(
                   _editing ? 'Save Changes' : 'Publish Service',
-                  onPressed: _saving ? null : _publish,
+                  loading: _saving, // spinner while the service and its photos upload
+                  onPressed: _publish,
                 ),
                 const SizedBox(height: 20),
               ],
@@ -453,7 +457,9 @@ class _PackageRow {
         priceText = TextEditingController(text: p),
         description = TextEditingController(text: d);
 
-  int? get price => int.tryParse(priceText.text.replaceAll(RegExp(r'[^0-9]'), ''));
+  double? get price => Validators.price(priceText.text) == null
+      ? double.parse(priceText.text.trim().replaceAll(' ', '').replaceAll(',', '.'))
+      : null;
 
   void dispose() {
     name.dispose();
@@ -461,3 +467,6 @@ class _PackageRow {
     description.dispose();
   }
 }
+
+/// 450 -> "450", 349.9 -> "349.90" (for the price box when editing).
+String _priceText(double price) => price == price.roundToDouble() ? price.toStringAsFixed(0) : price.toStringAsFixed(2);

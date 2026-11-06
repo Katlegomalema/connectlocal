@@ -8,6 +8,7 @@ import * as notificationService from './notificationService.js';
 import * as storage from '../integrations/storage.js';
 import logger from '../utils/logger.js';
 import { toLatLng } from '../utils/geo.js';
+import { BUSINESS_NAME, checkRegistrationNumber } from '../utils/validators.js';
 import {
   AuthorizationError, ConflictError, NotFoundError, ValidationError
 } from '../utils/errors.js';
@@ -35,9 +36,9 @@ const notifySafely = async (userId, notification) => {
 
 const normaliseRegistrationNumber = (value) => {
   const number = typeof value === 'string' ? value.trim() : '';
-  if (!REGISTRATION_NUMBER.test(number)) {
-    throw new ValidationError('Registration number must look like 2019/123456/07 (YYYY/NNNNNN/TT)');
-  }
+  // Same rule as the app and the route schema (utils/validators.js): format, year and company type.
+  const problem = checkRegistrationNumber(number);
+  if (problem) throw new ValidationError(problem);
   return number;
 };
 
@@ -46,9 +47,6 @@ const assertRegistrationNumberFree = async (registrationNumber, exceptProviderId
     throw new ConflictError('A business with this registration number has already applied');
   }
 };
-
-/** At least one letter; letters, digits, spaces and & . , ' ( ) - only (same rule as the app). */
-export const BUSINESS_NAME = /^(?=.*\p{L})[\p{L}\p{N}\s&.,'()-]+$/u;
 
 const assertBusinessName = (name) => {
   if (!name || name.length < 2 || name.length > 150 || !BUSINESS_NAME.test(name)) {

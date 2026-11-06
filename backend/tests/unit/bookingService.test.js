@@ -9,6 +9,7 @@ const repository = {
   getCustomerById: jest.fn(),
   hasBookingConflict: jest.fn(),
   getProviderAvailability: jest.fn(),
+  findPendingDuplicate: jest.fn(),
   createBooking: jest.fn(),
   getBookingById: jest.fn(),
   getProviderByUserId: jest.fn(),
@@ -60,6 +61,7 @@ describe('Booking service', () => {
     repository.getProviderByUserId.mockResolvedValue(verifiedProvider);
     repository.hasBookingConflict.mockResolvedValue(false);
     repository.getProviderAvailability.mockResolvedValue(allWeek);
+    repository.findPendingDuplicate.mockResolvedValue(null);
     repository.createBooking.mockImplementation(async (booking) => ({ id: 'booking-1', ...booking }));
     repository.updateBooking.mockImplementation(async (id, statuses, updates) => ({ id, ...updates }));
     payoutService.hasPayoutDetails.mockResolvedValue(true);
@@ -133,6 +135,19 @@ describe('Booking service', () => {
       address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
     })).rejects.toThrow('no longer available');
     expect(repository.createBooking).not.toHaveBeenCalled();
+  });
+
+  test('the same request sent twice (retry / double tap) returns the first booking, not a second one', async () => {
+    givenService();
+    repository.findPendingDuplicate.mockResolvedValue({ id: 'booking-1', status: 'pending', customer_id: 'customer-1' });
+    const booking = await bookingService.createBooking(customer, {
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    });
+    expect(booking).toMatchObject({ id: 'booking-1', reused: true });
+    expect(repository.createBooking).not.toHaveBeenCalled();
+    expect(repository.findPendingDuplicate).toHaveBeenCalledWith(expect.objectContaining({
+      customerId: 'customer-1', providerId: 'provider-1', serviceId: 'service-1'
+    }));
   });
 
   test('the slot check keeps 30 minutes free before and after the booking', async () => {

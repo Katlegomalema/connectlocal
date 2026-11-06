@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../shared/validators.dart';
+
 import 'package:flutter/services.dart';
 
 import '../../auth/auth_service.dart';
@@ -31,6 +33,17 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
 
   final _phone = TextEditingController();
   final _phoneFocus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    // Say what is wrong with the number as soon as the person leaves the box.
+    _phoneFocus.addListener(() {
+      if (!_phoneFocus.hasFocus && _phone.text.trim().isNotEmpty && !_phoneValid && mounted) {
+        setState(() => _error = Validators.saPhone('+27$_digits'));
+      }
+    });
+  }
   final _code = TextEditingController();
   final _codeFocus = FocusNode();
 
@@ -67,7 +80,8 @@ class _VerifyPhoneScreenState extends State<VerifyPhoneScreen> {
     // People often type the leading 0 (082 123 4567); +27 replaces it.
     return d.startsWith('0') ? d.substring(1) : d;
   }
-  bool get _phoneValid => _digits.length == 9;
+  // Same rule as the backend: a South African number (+27 then 9 digits, not starting with 0 or 9).
+  bool get _phoneValid => Validators.saPhone('+27$_digits') == null;
   /// What the backend expects: E.164, e.g. +27821234567.
   String get _e164 => '+27$_digits';
   String get _formattedPhone {

@@ -8,12 +8,13 @@ import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken, requireOwnership } from '../middleware/auth.js';
 import { validateBody, validateUuidParam } from '../middleware/validation.js';
+import { personNameSchema, saPhoneSchema } from '../utils/validators.js';
 import * as userService from '../services/userService.js';
 
 const router = express.Router();
 const updateProfileSchema = z.object({
-  fullName: z.string().min(2).max(150).optional(),
-  phoneNumber: z.string().max(20).optional(),
+  fullName: personNameSchema.optional(),
+  phoneNumber: saPhoneSchema.optional(),
   // Addresses live in customer_addresses (users has no address column); not editable here.
   profilePhotoUrl: z.string().url().optional()
 }).strict();

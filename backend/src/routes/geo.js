@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { AppError } from '../utils/errors.js';
 import { reverseGeocode, searchAddress } from '../integrations/nominatim.js';
+import { lineSchema } from '../utils/validators.js';
 
 const router = express.Router();
 
@@ -34,7 +35,7 @@ const limitPerClient = (req, res, next) => {
   return next();
 };
 
-const searchQuery = z.object({ q: z.string().trim().min(3, 'Type at least 3 characters').max(200) });
+const searchQuery = z.object({ q: lineSchema(200, { min: 3, label: 'The address' }) });
 const reverseQuery = z.object({
   lat: z.coerce.number().min(-90).max(90),
   lng: z.coerce.number().min(-180).max(180)

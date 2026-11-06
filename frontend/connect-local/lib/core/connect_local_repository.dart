@@ -1,6 +1,7 @@
 import '../features/community/models/models.dart';
 import '../features/shared/photo.dart';
 import 'api_client.dart';
+import 'payment_keys.dart';
 
 /// A category from the server (the list the app shows comes from here, not from built-in code).
 class CategoryInfo {
@@ -113,11 +114,11 @@ class ConnectLocalRepository {
         if (p is Map && p['is_active'] != false)
           ServicePackage(
             name: (p['name'] as String?) ?? '',
-            price: (_toDouble(p['price']) ?? 0).round(),
+            price: _toDouble(p['price']) ?? 0,
             description: (p['description'] as String?) ?? '',
           ),
     ]..sort((a, b) => a.price.compareTo(b.price));
-    final basePrice = (_toDouble(json['base_price']) ?? 0).round();
+    final basePrice = _toDouble(json['base_price']) ?? 0;
     return ServiceModel(
       id: json['id'] as String,
       name: (json['service_name'] as String?) ?? '',
@@ -197,7 +198,24 @@ class ConnectLocalRepository {
     required PhotoRef registrationDoc,
     required PhotoRef idDoc,
     List<PhotoRef> photos = const [],
+    void Function(String step, int done, int total)? onProgress,
   }) async {
+    // Progress for the screen: every step is named, so a failure says exactly what did not work.
+    final newPhotos = photos.where((p) => p.isLocal).toList();
+    final total = 4 + newPhotos.length;
+    var done = 0;
+    Future<T> step<T>(String name, Future<T> Function() run) async {
+      onProgress?.call(name, done, total);
+      try {
+        final result = await run();
+        done++;
+        onProgress?.call(name, done, total);
+        return result;
+      } on ApiException catch (e) {
+        throw ApiException('$name failed: ${e.message}', statusCode: e.statusCode, code: e.code, fieldErrors: e.fieldErrors);
+      }
+    }
+
     final profile = {
       'businessName': businessName,
       'category': category,
@@ -206,23 +224,32 @@ class ConnectLocalRepository {
       'registrationNumber': registrationNumber,
       'location': {'lat': latitude, 'lng': longitude},
     };
-    final existing = await myApplication();
-    if (existing == null) {
-      await api.post('/providers', body: profile);
-    } else if (!existing.isApproved) {
-      await api.patch('/providers/me', body: profile);
+    await step('Saving your business details', () async {
+      final existing = await myApplication();
+      if (existing == null) {
+        await api.post('/providers', body: profile);
+      } else if (!existing.isApproved) {
+        await api.patch('/providers/me', body: profile);
+      }
+    });
+
+    for (final (type, file, label) in [
+      ('registration_certificate', registrationDoc, 'Uploading the registration document'),
+      ('id_document', idDoc, 'Uploading your ID document'),
+    ]) {
+      await step(label, () async {
+        final uploaded = await upload(file, document: true);
+        await api.post('/providers/me/documents', body: {'documentType': type, 'storagePath': uploaded.path});
+      });
+    }
+    for (var i = 0; i < newPhotos.length; i++) {
+      await step('Uploading photo ${i + 1} of ${newPhotos.length}', () async {
+        final uploaded = await upload(newPhotos[i], document: false);
+        await api.post('/providers/me/photos', body: {'storagePath': uploaded.path});
+      });
     }
 
-    for (final (type, file) in [('registration_certificate', registrationDoc), ('id_document', idDoc)]) {
-      final uploaded = await upload(file, document: true);
-      await api.post('/providers/me/documents', body: {'documentType': type, 'storagePath': uploaded.path});
-    }
-    for (final photo in photos.where((p) => p.isLocal)) {
-      final uploaded = await upload(photo, document: false);
-      await api.post('/providers/me/photos', body: {'storagePath': uploaded.path});
-    }
-
-    await api.post('/providers/me/application/submit');
+    await step('Sending your application for review', () => api.post('/providers/me/application/submit'));
     return (await myApplication())!;
   }
 
@@ -262,7 +289,7 @@ class ConnectLocalRepository {
     String? serviceId,
     required String name,
     required String category,
-    required int price,
+    required double price,
     required String description,
     required PricingType pricingType,
     List<ServicePackage> packages = const [],
@@ -446,14 +473,22 @@ class ConnectLocalRepository {
   // ---- payments (PayFast) ----------------------------------------------------------------------------------
   /// Starts a card payment. [purpose]: 'booking_fee' or 'balance'. Open [checkoutUrl] in a browser,
   /// then poll [paymentStatus] until it is paid or failed.
-  Future<({String paymentId, String checkoutUrl, double amount, bool sandbox})> startPayment(
+  ///
+  /// Safe to call again (slow network, "Try again", app reopened): the same Idempotency-Key is sent, and the
+  /// server returns the SAME payment, or [alreadyPaid] = true when PayFast already confirmed it.
+  Future<({String paymentId, String? checkoutUrl, double amount, bool sandbox, bool alreadyPaid})> startPayment(
       String bookingId, String purpose) async {
-    final data = ApiClient.dataOf(await api.post('/payments/intent', body: {'bookingId': bookingId, 'purpose': purpose}));
+    final key = await PaymentKeys.keyFor(bookingId, purpose);
+    final data = ApiClient.dataOf(await api.post('/payments/intent',
+        body: {'bookingId': bookingId, 'purpose': purpose}, headers: {'Idempotency-Key': key}));
+    final alreadyPaid = data['alreadyPaid'] == true || data['status'] == 'paid';
+    if (alreadyPaid) await PaymentKeys.forget(bookingId, purpose);
     return (
       paymentId: data['paymentId'] as String,
-      checkoutUrl: data['checkoutUrl'] as String,
+      checkoutUrl: data['checkoutUrl'] as String?,
       amount: _toDouble(data['amount']) ?? 0,
       sandbox: data['sandbox'] == true,
+      alreadyPaid: alreadyPaid,
     );
   }
 

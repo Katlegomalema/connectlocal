@@ -52,7 +52,7 @@ export const buildCorsOptions = (env = process.env) => {
     origin: (origin, callback) => callback(null, isOriginAllowed(origin, allowed)),
     credentials: false,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
     maxAge: 600
   };
 };

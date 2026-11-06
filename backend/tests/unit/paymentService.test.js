@@ -15,7 +15,11 @@ const paymentRepository = {
   listBookingIdsForCustomer: jest.fn(),
   listBookingIdsForProvider: jest.fn(),
   listPayments: jest.fn(),
-  getReceiptByPaymentId: jest.fn()
+  getReceiptByPaymentId: jest.fn(),
+  getPaymentByIdempotencyKey: jest.fn(),
+  getActivePayment: jest.fn(),
+  applyPayfastPayment: jest.fn(),
+  DuplicatePaymentError: class DuplicatePaymentError extends Error {}
 };
 const payfast = {
   isSandbox: () => true,
@@ -62,6 +66,9 @@ describe('Payment service', () => {
     paymentRepository.getUserById.mockResolvedValue({ email: 'customer@example.test', full_name: 'Test Customer' });
     payfast.createPayment.mockResolvedValue({ url: 'https://sandbox.payfast.test/eng/process', payload: {} });
     paymentRepository.updateBookingPaymentState.mockResolvedValue({ id: 'booking-1' });
+    paymentRepository.getActivePayment.mockResolvedValue(null);
+    paymentRepository.getPaymentByIdempotencyKey.mockResolvedValue(null);
+    paymentRepository.applyPayfastPayment.mockResolvedValue({ outcome: 'paid' });
   });
 
   test('booking fee checkout charges only the 15% fee while the booking is pending', async () => {
@@ -145,11 +152,11 @@ describe('Payment service', () => {
       m_payment_id: '00000000-0000-4000-8000-0000000000a1', payment_status: 'COMPLETE', amount_gross: '75.00', pf_payment_id: 'pf-1'
     }, '192.0.2.1');
 
-    expect(paymentRepository.updatePayment).toHaveBeenCalledWith('payment-1', ['pending'], expect.objectContaining({
-      payment_status: 'paid', transaction_reference: 'pf-1'
+    // Payment + receipt + booking fee in ONE database transaction (apply_payfast_payment).
+    expect(paymentRepository.applyPayfastPayment).toHaveBeenCalledWith('payment-1', 'pf-1', 75, expect.objectContaining({
+      pf_payment_id: 'pf-1'
     }));
-    expect(paymentRepository.createReceipt).toHaveBeenCalledWith('payment-1');
-    expect(paymentRepository.updateBookingPaymentState).toHaveBeenCalledWith('booking-1', {}, { booking_fee_status: 'paid' });
+    expect(paymentRepository.updatePayment).not.toHaveBeenCalled();
     expect(paymentRepository.createPayout).not.toHaveBeenCalled();
     expect(result.processed).toBe(true);
   });
@@ -203,9 +210,7 @@ describe('Payment service', () => {
       m_payment_id: '00000000-0000-4000-8000-0000000000a2', payment_status: 'COMPLETE', amount_gross: '425.00', pf_payment_id: 'pf-2'
     }, '192.0.2.1');
 
-    expect(paymentRepository.updateBookingPaymentState).toHaveBeenCalledWith('booking-1', {}, {
-      balance_status: 'paid', balance_payment_method: 'card'
-    });
+    expect(paymentRepository.applyPayfastPayment).toHaveBeenCalledWith('payment-2', 'pf-2', 425, expect.anything());
     expect(paymentRepository.createPayout).toHaveBeenCalledWith(expect.objectContaining({
       booking_id: 'booking-1',
       provider_id: 'provider-1',
@@ -225,6 +230,128 @@ describe('Payment service', () => {
       m_payment_id: '00000000-0000-4000-8000-0000000000a1', payment_status: 'COMPLETE', amount_gross: '1.00'
     }, '192.0.2.1')).rejects.toThrow('does not match');
     expect(paymentRepository.updatePayment).not.toHaveBeenCalled();
+    expect(paymentRepository.applyPayfastPayment).not.toHaveBeenCalled();
+  });
+
+  describe('never charged twice', () => {
+    const pending = (id = 'payment-1', extra = {}) => ({
+      id, booking_id: 'booking-1', purpose: 'booking_fee', payment_status: 'pending', amount: 75, ...extra
+    });
+
+    test('double tap (same Idempotency-Key twice): the same payment and checkout, one insert', async () => {
+      paymentRepository.getBookingById.mockResolvedValue(pendingBooking);
+      paymentRepository.createPayment.mockResolvedValueOnce(pending('payment-1', { idempotency_key: 'tap-key-123' }));
+      const first = await paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'tap-key-123');
+      paymentRepository.getPaymentByIdempotencyKey.mockResolvedValue(pending('payment-1', { idempotency_key: 'tap-key-123' }));
+      const second = await paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'tap-key-123');
+
+      expect(first.created).toBe(true);
+      expect(second.created).toBe(false);
+      expect(second.paymentId).toBe(first.paymentId);
+      expect(paymentRepository.createPayment).toHaveBeenCalledTimes(1);
+      expect(paymentRepository.createPayment).toHaveBeenCalledWith(expect.objectContaining({ idempotency_key: 'tap-key-123' }));
+    });
+
+    test('a new key while a checkout is open still returns the open payment (no second charge)', async () => {
+      paymentRepository.getBookingById.mockResolvedValue(pendingBooking);
+      paymentRepository.getActivePayment.mockResolvedValue(pending('payment-1'));
+      const result = await paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'another-key-1');
+      expect(result).toMatchObject({ created: false, paymentId: 'payment-1' });
+      expect(paymentRepository.createPayment).not.toHaveBeenCalled();
+    });
+
+    test('already paid: returns the paid payment, no checkout, nothing new', async () => {
+      paymentRepository.getBookingById.mockResolvedValue({ ...pendingBooking, booking_fee_status: 'paid' });
+      paymentRepository.getActivePayment.mockResolvedValue(pending('payment-1', { payment_status: 'paid' }));
+      const result = await paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'late-key-123');
+      expect(result).toMatchObject({
+        created: false, paymentId: 'payment-1', alreadyPaid: true, checkoutUrl: null
+      });
+      expect(payfast.createPayment).not.toHaveBeenCalled();
+      expect(paymentRepository.createPayment).not.toHaveBeenCalled();
+    });
+
+    test('two requests at the same time: the database lets one in, both get that payment', async () => {
+      paymentRepository.getBookingById.mockResolvedValue(pendingBooking);
+      let inserted = null;
+      paymentRepository.createPayment.mockImplementation(async (row) => {
+        await new Promise((resolve) => { setTimeout(resolve, 5); });
+        if (inserted) throw new paymentRepository.DuplicatePaymentError();
+        inserted = { ...pending('payment-1'), ...row, id: 'payment-1' };
+        return inserted;
+      });
+      paymentRepository.getActivePayment
+        .mockResolvedValueOnce(null).mockResolvedValueOnce(null) // both look before either inserted
+        .mockImplementation(async () => inserted);
+
+      const [a, b] = await Promise.all([
+        paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'race-key-aaa'),
+        paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'race-key-bbb')
+      ]);
+      expect(a.paymentId).toBe('payment-1');
+      expect(b.paymentId).toBe('payment-1');
+      expect([a.created, b.created].sort()).toEqual([false, true]);
+    });
+
+    test('slow network: the app gave up waiting, retries with the same key, gets the payment made the first time', async () => {
+      paymentRepository.getBookingById.mockResolvedValue(pendingBooking);
+      // First request reached the server and created the payment, but the answer never reached the phone.
+      paymentRepository.createPayment.mockResolvedValueOnce(pending('payment-1', { idempotency_key: 'slow-net-key' }));
+      await paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'slow-net-key');
+      // The retry, same key:
+      paymentRepository.getPaymentByIdempotencyKey.mockResolvedValue(pending('payment-1', { idempotency_key: 'slow-net-key' }));
+      const retry = await paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'slow-net-key');
+      expect(retry).toMatchObject({ created: false, paymentId: 'payment-1' });
+      expect(paymentRepository.createPayment).toHaveBeenCalledTimes(1);
+    });
+
+    test('after a failed try, paying again reopens the SAME payment row (still one payment)', async () => {
+      paymentRepository.getBookingById.mockResolvedValue({ ...pendingBooking, booking_fee_status: 'failed' });
+      paymentRepository.getPaymentByIdempotencyKey.mockResolvedValue(pending('payment-1', { payment_status: 'failed', idempotency_key: 'retry-key-1' }));
+      paymentRepository.getPaymentByBookingAndPurpose.mockResolvedValue(pending('payment-1', { payment_status: 'failed', idempotency_key: 'retry-key-1' }));
+      paymentRepository.updatePayment.mockResolvedValue(pending('payment-1', { idempotency_key: 'retry-key-1' }));
+      const result = await paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'retry-key-1');
+      expect(result).toMatchObject({ created: false, paymentId: 'payment-1', status: 'pending' });
+      expect(paymentRepository.updatePayment).toHaveBeenCalledWith('payment-1', ['failed'], expect.objectContaining({ payment_status: 'pending' }));
+      expect(paymentRepository.createPayment).not.toHaveBeenCalled();
+    });
+
+    test('an Idempotency-Key from another booking is refused; a malformed key is refused', async () => {
+      paymentRepository.getBookingById.mockResolvedValue(pendingBooking);
+      paymentRepository.getPaymentByIdempotencyKey.mockResolvedValue(pending('payment-9', { booking_id: 'booking-2' }));
+      await expect(paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'reused-key-1'))
+        .rejects.toThrow('another payment');
+      await expect(paymentService.createPaymentIntent(customer, 'booking-1', 'booking_fee', 'bad key!'))
+        .rejects.toThrow('Idempotency-Key');
+    });
+
+    test('duplicate ITN: the second one changes nothing (no second payout, no second notification)', async () => {
+      payfast.verifyItn.mockResolvedValue(true);
+      paymentRepository.getPaymentById.mockResolvedValue(pending('payment-2', { purpose: 'balance', amount: 425 }));
+      paymentRepository.getBookingById.mockResolvedValue({ ...pendingBooking, status: 'completed' });
+      const itn = {
+        m_payment_id: '00000000-0000-4000-8000-0000000000a2', payment_status: 'COMPLETE', amount_gross: '425.00', pf_payment_id: 'pf-2'
+      };
+      paymentRepository.applyPayfastPayment.mockResolvedValueOnce({ outcome: 'paid' })
+        .mockResolvedValueOnce({ outcome: 'already_processed' });
+
+      const first = await paymentService.processPayFastItn(itn, '192.0.2.1');
+      const second = await paymentService.processPayFastItn(itn, '192.0.2.1');
+
+      expect(first.processed).toBe(true);
+      expect(second).toMatchObject({ processed: false, duplicate: true });
+      expect(paymentRepository.createPayout).toHaveBeenCalledTimes(1);
+    });
+
+    test('wrong amount caught inside the transaction too (amount changed between check and update)', async () => {
+      payfast.verifyItn.mockResolvedValue(true);
+      paymentRepository.getPaymentById.mockResolvedValue(pending('payment-1'));
+      paymentRepository.applyPayfastPayment.mockResolvedValueOnce({ outcome: 'amount_mismatch' });
+      await expect(paymentService.processPayFastItn({
+        m_payment_id: '00000000-0000-4000-8000-0000000000a1', payment_status: 'COMPLETE', amount_gross: '75.00', pf_payment_id: 'pf-1'
+      }, '192.0.2.1')).rejects.toThrow('does not match');
+      expect(paymentRepository.createPayout).not.toHaveBeenCalled();
+    });
   });
 
   test('cash balance: provider confirms, payout subtracts the cash already collected', async () => {

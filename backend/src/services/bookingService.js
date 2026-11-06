@@ -30,7 +30,7 @@ const TERMINAL_STATUSES = ['completed', 'cancelled', 'rejected'];
 const parseStartTime = (value) => {
   const date = new Date(value);
   if (!value || Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) {
-    throw new ValidationError('scheduledStart must be a valid future date');
+    throw new ValidationError('That date and time is in the past. Please choose a later time.');
   }
 
   const maxAdvanceDays = Number(process.env.MAX_BOOKING_ADVANCE_DAYS || 365);
@@ -178,6 +178,15 @@ export const createBooking = async (actor, bookingData) => {
   }
 
   const scheduledStart = parseStartTime(bookingData.scheduledStart);
+  // Sent twice (slow network, double tap, app reopened)? Return the first request, never a second booking fee.
+  const duplicate = await bookingRepository.findPendingDuplicate({
+    customerId: actor.id,
+    providerId: service.provider_id,
+    serviceId: service.id,
+    scheduledStart: scheduledStart.toISOString()
+  });
+  if (duplicate) return { ...publicBooking(duplicate, actor), reused: true };
+
   const scheduledEnd = new Date(scheduledStart.getTime() + blockedMinutes * 60000);
   const workingHours = hoursFromRows(await bookingRepository.getProviderAvailability(provider.id));
   if (!fitsWorkingHours(workingHours, scheduledStart, blockedMinutes)) {

@@ -6,6 +6,7 @@ import '../../shared/map_picker_screen.dart';
 import '../../shared/photo.dart';
 import '../../shared/photo_picker.dart';
 import '../../shared/photo_viewer.dart';
+import '../../shared/validators.dart';
 import '../../shared/verification.dart';
 import '../state/app_state.dart';
 
@@ -56,18 +57,17 @@ class BecomeProviderScreen extends StatefulWidget {
 
   /// Called with the form data when the user taps Submit Application. Returns an error message to show
   /// (the form stays open), or null when the application was sent.
-  final Future<String?> Function(ProviderApplication application)? onSubmit;
+  final Future<String?> Function(
+    ProviderApplication application,
+    void Function(String step, int done, int total) onProgress,
+  )?
+  onSubmit;
 
   /// What the "Back to Home" button on the confirmation page does. Defaults to
   /// returning to the first screen of the stack.
   final VoidCallback? onDone;
 
-  const BecomeProviderScreen({
-    super.key,
-    this.categories = AppState.kCategories,
-    this.onSubmit,
-    this.onDone,
-  });
+  const BecomeProviderScreen({super.key, this.categories = AppState.kCategories, this.onSubmit, this.onDone});
 
   @override
   State<BecomeProviderScreen> createState() => _BecomeProviderScreenState();
@@ -85,6 +85,8 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
   PhotoRef? _idDoc;
   GeoPoint? _point; // from GPS, or found from the address on submit
   bool _busy = false;
+  final _formKey = GlobalKey<FormState>();
+  bool _triedSubmit = false; // after the first Submit, missing picks (category, documents) show in red
   String? _category;
   final List<PhotoRef> _photos = [];
 
@@ -109,9 +111,7 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
             for (final c in widget.categories)
               ListTile(
                 title: Text(c),
-                trailing: c == _category
-                    ? const Icon(Icons.check, color: FigmaColors.teal)
-                    : null,
+                trailing: c == _category ? const Icon(Icons.check, color: FigmaColors.teal) : null,
                 onTap: () => Navigator.pop(sheetContext, c),
               ),
           ],
@@ -122,16 +122,13 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
   }
 
   Future<void> _pickRegDoc() async {
-    final picked = await PhotoPicker.pick(context,
-        max: 1, title: 'Upload registration document', allowDocument: true);
+    final picked = await PhotoPicker.pick(context, max: 1, title: 'Upload registration document', allowDocument: true);
     if (picked.isEmpty || !mounted) return;
     setState(() => _regDoc = picked.first);
   }
 
   Future<void> _pickIdDoc() async {
-    final picked =
-        await PhotoPicker.pick(context,
-            max: 1, title: 'Photo of your ID document', allowDocument: true);
+    final picked = await PhotoPicker.pick(context, max: 1, title: 'Photo of your ID document', allowDocument: true);
     if (picked.isEmpty || !mounted) return;
     setState(() => _idDoc = picked.first);
   }
@@ -139,9 +136,9 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
   Future<void> _addImage() async {
     final room = _maxImages - _photos.length;
     if (room <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: Duration(seconds: 3), content: Text('You can add up to 6 images')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('You can add up to 6 images')));
       return;
     }
     final picked = await PhotoPicker.pick(context, max: room, title: 'Add portfolio photos');
@@ -156,8 +153,9 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
     setState(() => _busy = false);
     final here = point;
     if (here == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(duration: const Duration(seconds: 5), content: Text(problem ?? 'Location not available.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(duration: const Duration(seconds: 5), content: Text(problem ?? 'Location not available.')),
+      );
       return;
     }
     setState(() {
@@ -177,40 +175,30 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
 
   Future<void> _submit() async {
     if (_busy) return;
-    if (_name.text.trim().isEmpty ||
-        _category == null ||
-        _description.text.trim().isEmpty ||
-        _location.text.trim().isEmpty ||
-        _regNumber.text.trim().isEmpty ||
-        _idNumber.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(duration: Duration(seconds: 3), content: Text('Please fill in all the fields')),
-      );
-      return;
-    }
     void warn(String m) =>
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(m)));
-
-    // Same rule as the server: at least one letter; letters, digits, spaces and & . , ' ( ) - only.
-    if (!isValidBusinessName(_name.text)) return warn('Please enter a valid business name');
-
-    final regProblem = checkRegistrationNumber(_regNumber.text);
-    if (regProblem != null) return warn(regProblem);
-    final id = parseSaId(_idNumber.text);
-    if (id == null) return warn('That South African ID number is not valid');
-    if (id.age < 18) return warn('You must be 18 or older to become a provider');
-    if (_idDoc == null) return warn('Please upload a photo of your ID document');
-    if (_regDoc == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
-          content: Text('Please upload your business registration document')));
-      return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 4), content: Text(m)));
+    setState(() => _triedSubmit = true);
+    // Every problem is shown under its own field, and the page scrolls to the first one.
+    final fieldsOk = validateAndReveal(_formKey);
+    final missing = [
+      if (_category == null) 'a category',
+      if (_regDoc == null) 'the registration document',
+      if (_idDoc == null) 'a photo of your ID',
+    ];
+    if (!fieldsOk || missing.isNotEmpty) {
+      return warn(
+        !fieldsOk
+            ? 'Please fix the fields marked in red.'
+            : 'Please add ${missing.join(', ').replaceFirst(RegExp(r', (?=[^,]*$)'), ' and ')}.',
+      );
     }
+    final id = parseSaId(_idNumber.text)!;
+    if (id.age < 18) return warn('You must be 18 or older to become a provider');
+
     // Find the business on the map (customers see it and get directions).
     var point = _point;
     if (point == null || (point.label != null && point.label != _location.text.trim())) {
       setState(() => _busy = true);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          duration: Duration(seconds: 2), content: Text('Finding your address on the map…')));
       final found = await lookupAddress(_location.text);
       point = found.point;
       if (!mounted) return;
@@ -220,10 +208,10 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
       }
     }
     final application = ProviderApplication(
-      businessName: _name.text.trim(),
+      businessName: Validators.oneLine(_name.text),
       category: _category!,
       description: _description.text.trim(),
-      location: _location.text.trim(),
+      location: Validators.oneLine(_location.text),
       registrationNumber: _regNumber.text.trim(),
       latitude: point.latitude,
       longitude: point.longitude,
@@ -232,19 +220,55 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
       idDoc: _idDoc!,
       portfolio: List.of(_photos),
     );
-    // Uploads the documents/photos and sends the application for admin review.
+    // Uploads the documents/photos straight to Storage and sends the application, with a progress window.
     setState(() => _busy = true);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        duration: Duration(seconds: 2), content: Text('Sending your application…')));
-    final error = await widget.onSubmit?.call(application);
+    final progress = ValueNotifier<({String step, int done, int total})>((step: 'Starting…', done: 0, total: 1));
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _UploadProgressDialog(progress: progress),
+    );
+    final error = await widget.onSubmit?.call(
+      application,
+      (step, done, total) => progress.value = (step: step, done: done, total: total),
+    );
     if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop(); // the progress window
+    progress.dispose();
     setState(() => _busy = false);
-    if (error != null) return warn(error);
+    if (error != null) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Your application was not sent'),
+          content: Text('$error\n\nNothing is lost: tap Try again to continue.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close')),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                _submit();
+              },
+              child: const Text('Try again'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => ApplicationSubmittedScreen(onBackToHome: widget.onDone)),
     );
   }
+
+  /// Red message under a pick (category / document) once Submit was tried without it.
+  Widget _missingNote(bool missing, String text) => !_triedSubmit || !missing
+      ? const SizedBox.shrink()
+      : Padding(
+          padding: const EdgeInsets.only(top: 6, left: 12),
+          child: Text(text, style: const TextStyle(fontSize: 12, color: Colors.red)),
+        );
 
   Widget _selectField({
     required String text,
@@ -266,13 +290,7 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                text,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: isHint ? FigmaColors.body : FigmaColors.title,
-                ),
-              ),
+              child: Text(text, style: TextStyle(fontSize: 14, color: isHint ? FigmaColors.body : FigmaColors.title)),
             ),
             Icon(icon, size: 20, color: FigmaColors.body),
           ],
@@ -284,147 +302,155 @@ class _BecomeProviderScreenState extends State<BecomeProviderScreen> {
   @override
   Widget build(BuildContext context) {
     return FigmaPage(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const SizedBox(height: 28),
-          const Text(
-            'Become a Provider',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: FigmaColors.title,
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 28),
+            const Text(
+              'Become a Provider',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: FigmaColors.title),
             ),
-          ),
-          const SizedBox(height: 14),
-          const Text(
-            'Offer your services and grow your business',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 14, color: FigmaColors.body),
-          ),
-          const SizedBox(height: 32),
-          TextField(
-            controller: _name,
-            textCapitalization: TextCapitalization.words,
-            decoration: figmaInput('Business Name'),
-          ),
-          const SizedBox(height: 14),
-          _selectField(
-            text: _category ?? 'Category',
-            isHint: _category == null,
-            icon: Icons.arrow_drop_down,
-            onTap: _pickCategory,
-          ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _description,
-            minLines: 4,
-            maxLines: 6,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: figmaInput('Describe your services...'),
-          ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _location,
-            textCapitalization: TextCapitalization.words,
-            onChanged: (_) => _point = null,
-            decoration: figmaInput('Business address (street, suburb, city)'),
-          ),
-          Wrap(
-            children: [
-              TextButton.icon(
-                onPressed: _busy ? null : _chooseOnMap,
-                icon: const Icon(Icons.map_outlined, size: 18),
-                label: const Text('Choose on map'),
-              ),
-              TextButton.icon(
-                onPressed: _busy ? null : _useMyLocation,
-                icon: const Icon(Icons.my_location, size: 18),
-                label: const Text('Use my current location'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _regNumber,
-            keyboardType: TextInputType.number,
-            decoration: figmaInput('Business registration no. (2019/123456/07)'),
-          ),
-          const SizedBox(height: 14),
-          _selectField(
-            text: _regDoc == null
-                ? 'Upload registration document'
-                : 'Registration document added (tap to replace)',
-            isHint: _regDoc == null,
-            icon: _regDoc == null ? Icons.upload_file_outlined : Icons.check_circle,
-            onTap: _pickRegDoc,
-          ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _idNumber,
-            keyboardType: TextInputType.number,
-            maxLength: 13,
-            decoration: figmaInput('Your South African ID number').copyWith(counterText: ''),
-          ),
-          const SizedBox(height: 14),
-          _selectField(
-            text: _idDoc == null
-                ? 'Upload photo of your ID'
-                : 'ID photo added (tap to replace)',
-            isHint: _idDoc == null,
-            icon: _idDoc == null ? Icons.badge_outlined : Icons.check_circle,
-            onTap: _pickIdDoc,
-          ),
-          const SizedBox(height: 14),
-          _selectField(
-            text: _photos.isEmpty
-                ? 'Upload Portfolio Images'
-                : _photos.length == 1
-                    ? '1 image added (tap to add more)'
-                    : '${_photos.length} images added (tap to add more)',
-            isHint: _photos.isEmpty,
-            icon: Icons.photo_camera_outlined,
-            onTap: _addImage,
-          ),
-          if (_photos.isNotEmpty) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
+            const Text(
+              'Offer your services and grow your business',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14, color: FigmaColors.body),
+            ),
+            const SizedBox(height: 32),
+            ValidatedField(
+              controller: _name,
+              textCapitalization: TextCapitalization.words,
+              decoration: figmaInput('Business Name'),
+              validator: Validators.businessName,
+            ),
+            const SizedBox(height: 14),
+            _selectField(
+              text: _category ?? 'Category',
+              isHint: _category == null,
+              icon: Icons.arrow_drop_down,
+              onTap: _pickCategory,
+            ),
+            _missingNote(_category == null, 'Choose a category'),
+            const SizedBox(height: 14),
+            ValidatedField(
+              controller: _description,
+              minLines: 4,
+              maxLines: 6,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: figmaInput('Describe your services...'),
+              validator: (v) => Validators.text(v, min: 10, max: 2000, label: 'The description'),
+            ),
+            const SizedBox(height: 14),
+            ValidatedField(
+              controller: _location,
+              textCapitalization: TextCapitalization.words,
+              onChanged: (_) => _point = null,
+              decoration: figmaInput('Business address (street, suburb, city)'),
+              validator: Validators.address,
+            ),
             Wrap(
-              spacing: 10,
-              runSpacing: 10,
               children: [
-                for (int i = 0; i < _photos.length; i++)
-                  Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      GestureDetector(
-                        onTap: () => showPhotoViewer(context, _photos, initialIndex: i),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: PhotoImage(_photos[i], width: 72, height: 72),
-                        ),
-                      ),
-                      Positioned(
-                        right: -6,
-                        top: -6,
-                        child: GestureDetector(
-                          onTap: () => setState(() => _photos.removeAt(i)),
-                          child: Container(
-                            padding: const EdgeInsets.all(3),
-                            decoration: const BoxDecoration(
-                                color: Colors.black87, shape: BoxShape.circle),
-                            child: const Icon(Icons.close, size: 14, color: Colors.white),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                TextButton.icon(
+                  onPressed: _busy ? null : _chooseOnMap,
+                  icon: const Icon(Icons.map_outlined, size: 18),
+                  label: const Text('Choose on map'),
+                ),
+                TextButton.icon(
+                  onPressed: _busy ? null : _useMyLocation,
+                  icon: const Icon(Icons.my_location, size: 18),
+                  label: const Text('Use my current location'),
+                ),
               ],
             ),
+            const SizedBox(height: 14),
+            // Digits only: the slashes are added for the person (a phone number keypad has no "/").
+            ValidatedField(
+              controller: _regNumber,
+              keyboardType: TextInputType.number,
+              inputFormatters: [RegistrationNumberFormatter()],
+              decoration: figmaInput('Business registration no. (2019/123456/07)'),
+              validator: Validators.registrationNumber,
+            ),
+            const SizedBox(height: 14),
+            _selectField(
+              text: _regDoc == null ? 'Upload registration document' : 'Registration document added (tap to replace)',
+              isHint: _regDoc == null,
+              icon: _regDoc == null ? Icons.upload_file_outlined : Icons.check_circle,
+              onTap: _pickRegDoc,
+            ),
+            _missingNote(_regDoc == null, 'Upload the registration document (PDF or photo, max 10 MB)'),
+            const SizedBox(height: 14),
+            ValidatedField(
+              controller: _idNumber,
+              keyboardType: TextInputType.number,
+              maxLength: 13,
+              decoration: figmaInput('Your South African ID number').copyWith(counterText: ''),
+              validator: (v) {
+                final problem = Validators.saId(v);
+                if (problem != null) return problem;
+                return parseSaId(v ?? '')!.age < 18 ? 'You must be 18 or older to become a provider' : null;
+              },
+            ),
+            const SizedBox(height: 14),
+            _selectField(
+              text: _idDoc == null ? 'Upload photo of your ID' : 'ID photo added (tap to replace)',
+              isHint: _idDoc == null,
+              icon: _idDoc == null ? Icons.badge_outlined : Icons.check_circle,
+              onTap: _pickIdDoc,
+            ),
+            _missingNote(_idDoc == null, 'Upload a photo of your ID (max 10 MB)'),
+            const SizedBox(height: 14),
+            _selectField(
+              text: _photos.isEmpty
+                  ? 'Upload Portfolio Images'
+                  : _photos.length == 1
+                  ? '1 image added (tap to add more)'
+                  : '${_photos.length} images added (tap to add more)',
+              isHint: _photos.isEmpty,
+              icon: Icons.photo_camera_outlined,
+              onTap: _addImage,
+            ),
+            if (_photos.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (int i = 0; i < _photos.length; i++)
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        GestureDetector(
+                          onTap: () => showPhotoViewer(context, _photos, initialIndex: i),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: PhotoImage(_photos[i], width: 72, height: 72),
+                          ),
+                        ),
+                        Positioned(
+                          right: -6,
+                          top: -6,
+                          child: GestureDetector(
+                            onTap: () => setState(() => _photos.removeAt(i)),
+                            child: Container(
+                              padding: const EdgeInsets.all(3),
+                              decoration: const BoxDecoration(color: Colors.black87, shape: BoxShape.circle),
+                              child: const Icon(Icons.close, size: 14, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 28),
+            FigmaButton('Submit Application', onPressed: _submit),
           ],
-          const SizedBox(height: 28),
-          FigmaButton('Submit Application', onPressed: _submit),
-        ],
+        ),
       ),
     );
   }
@@ -443,10 +469,7 @@ class ApplicationSubmittedScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return FigmaPage(
       showBack: false,
-      bottom: FigmaButton(
-        'Back to Home',
-        onPressed: onBackToHome ?? () => popToRoot(context),
-      ),
+      bottom: FigmaButton('Back to Home', onPressed: onBackToHome ?? () => popToRoot(context)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -456,22 +479,14 @@ class ApplicationSubmittedScreen extends StatelessWidget {
               'assets/images/application_submitted.png',
               height: 150,
               fit: BoxFit.contain,
-              errorBuilder: (_, _, _) => const Icon(
-                Icons.mark_email_read_outlined,
-                size: 110,
-                color: FigmaColors.teal,
-              ),
+              errorBuilder: (_, _, _) => const Icon(Icons.mark_email_read_outlined, size: 110, color: FigmaColors.teal),
             ),
           ),
           const SizedBox(height: 24),
           const Text(
             'Application Submitted!',
             textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: FigmaColors.teal,
-            ),
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: FigmaColors.teal),
           ),
           const SizedBox(height: 22),
           const Text(
@@ -491,7 +506,6 @@ class ApplicationSubmittedScreen extends StatelessWidget {
   }
 }
 
-
 /// Opens the "Become a Provider" form and sends the application to the admin.
 void openBecomeProvider(BuildContext context, {VoidCallback? onDone}) {
   final app = AppScope.read(context);
@@ -501,7 +515,7 @@ void openBecomeProvider(BuildContext context, {VoidCallback? onDone}) {
       builder: (_) => BecomeProviderScreen(
         categories: AppState.categories,
         onDone: onDone,
-        onSubmit: (a) => app.sendProviderApplication(
+        onSubmit: (a, onProgress) => app.sendProviderApplication(
           businessName: a.businessName,
           category: a.category,
           description: a.description,
@@ -513,6 +527,38 @@ void openBecomeProvider(BuildContext context, {VoidCallback? onDone}) {
           idNumber: a.idNumber,
           idDoc: a.idDoc,
           photos: a.portfolio,
+          onProgress: onProgress,
+        ),
+      ),
+    ),
+  );
+}
+
+/// "Uploading your ID document… 2 of 5" while the application is being sent.
+class _UploadProgressDialog extends StatelessWidget {
+  final ValueNotifier<({String step, int done, int total})> progress;
+  const _UploadProgressDialog({required this.progress});
+
+  @override
+  Widget build(BuildContext context) => PopScope(
+    canPop: false,
+    child: AlertDialog(
+      title: const Text('Sending your application'),
+      content: ValueListenableBuilder<({String step, int done, int total})>(
+        valueListenable: progress,
+        builder: (_, p, _) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            LinearProgressIndicator(value: p.total == 0 ? null : p.done / p.total),
+            const SizedBox(height: 12),
+            Text('${p.step}…', style: const TextStyle(fontSize: 14)),
+            const SizedBox(height: 4),
+            Text(
+              'Step ${p.done < p.total ? p.done + 1 : p.total} of ${p.total}. Please keep the app open.',
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ],
         ),
       ),
     ),

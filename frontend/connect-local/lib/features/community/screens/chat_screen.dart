@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+
+import '../../shared/validators.dart';
 import '../../shared/brand.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
@@ -66,6 +68,11 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _send() async {
     final text = _ctrl.text.trim();
     if (text.isEmpty || _sending) return;
+    final problem = Validators.text(text, max: 2000, label: 'Your message');
+    if (problem != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(problem)));
+      return;
+    }
     setState(() => _sending = true);
     final messenger = ScaffoldMessenger.of(context);
     final error = await AppScope.read(context).sendMessage(widget.booking.id, text);

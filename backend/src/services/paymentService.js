@@ -4,6 +4,7 @@
  */
 
 import * as paymentRepository from '../repositories/paymentRepository.js';
+import { DuplicatePaymentError } from '../repositories/paymentRepository.js';
 import * as payfast from '../integrations/payfast.js';
 import * as payoutService from './payoutService.js';
 import { notifyBookingEvent } from './bookingNotifier.js';
@@ -95,16 +96,68 @@ const purposeConfig = (purpose) => {
   return config;
 };
 
+/** What the app gets back for a card payment: the same answer for the same payment, every time. */
+const intentAnswer = async (payment, booking, config, purpose) => {
+  const base = {
+    paymentId: payment.id, // = PayFast m_payment_id, created and stored before the customer goes to PayFast
+    purpose,
+    amount: toAmount(payment.amount),
+    currency: 'ZAR',
+    status: payment.payment_status,
+    sandbox: payfast.isSandbox()
+  };
+  if (payment.payment_status === 'paid') return { ...base, alreadyPaid: true, checkoutUrl: null };
+  const checkout = await buildCheckout(payment, booking, config);
+  return {
+    ...base,
+    alreadyPaid: false,
+    // Open this in a browser; it posts the signed form to PayFast. Then poll GET /payments/:paymentId.
+    checkoutUrl: checkoutLink(payment.id),
+    redirectUrl: checkout.url,
+    fields: checkout.payload
+  };
+};
+
+export const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{8,100}$/;
+
 /**
  * Card checkout (PayFast) for the 15% booking fee or for the balance after completion.
+ *
+ * Never charges twice:
+ *   - the same Idempotency-Key always returns the same payment;
+ *   - an open (pending) or paid payment for this booking and purpose is returned instead of a new one;
+ *   - two requests at the same moment: the database lets only one payment in (unique indexes), the other
+ *     request returns that same payment.
+ * Returns { created, ...answer } (created = a new payment row was made).
  */
-export const createPaymentIntent = async (actor, bookingId, purpose = 'booking_fee') => {
+export const createPaymentIntent = async (actor, bookingId, purpose = 'booking_fee', idempotencyKey = null) => {
   if (actor?.role !== 'customer') throw new AuthorizationError('Only customers can pay for bookings');
   if (!bookingId) throw new ValidationError('bookingId is required');
+  if (idempotencyKey != null && !IDEMPOTENCY_KEY.test(idempotencyKey)) {
+    throw new ValidationError('Idempotency-Key must be 8 to 100 letters, digits, - or _');
+  }
   const config = purposeConfig(purpose);
 
   const booking = await paymentRepository.getBookingById(bookingId);
   if (booking.customer_id !== actor.id) throw new AuthorizationError('You do not own this booking');
+
+  // 1. Same key as before (a retry after a slow network, a double tap): the same payment.
+  if (idempotencyKey) {
+    const keyed = await paymentRepository.getPaymentByIdempotencyKey(idempotencyKey);
+    if (keyed) {
+      if (keyed.booking_id !== bookingId || keyed.purpose !== purpose) {
+        throw new ConflictError('This Idempotency-Key was already used for another payment');
+      }
+      if (['pending', 'paid'].includes(keyed.payment_status)) {
+        return { created: false, ...(await intentAnswer(keyed, booking, config, purpose)) };
+      }
+    }
+  }
+
+  // 2. Already paid, or a checkout already open for this booking + purpose: the same payment.
+  const active = await paymentRepository.getActivePayment(bookingId, purpose);
+  if (active?.payment_status === 'paid') return { created: false, ...(await intentAnswer(active, booking, config, purpose)) };
+
   if (booking.status !== config.bookingStatus) throw new ConflictError(config.wrongStatus);
   if (booking[config.stateColumn] === 'paid') throw new ConflictError('This part of the booking is already paid');
   if (!['pending', 'failed'].includes(booking[config.stateColumn])) {
@@ -113,19 +166,26 @@ export const createPaymentIntent = async (actor, bookingId, purpose = 'booking_f
   const amount = toAmount(booking[config.amountColumn]);
   if (!Number.isFinite(amount) || amount <= 0) throw new ValidationError('Booking has an invalid payment amount');
 
-  let payment = await paymentRepository.getPaymentByBookingAndPurpose(bookingId, purpose);
-  if (payment && FINAL_STATUSES.includes(payment.payment_status)) {
-    throw new ConflictError('This part of the booking is already paid');
+  if (active?.payment_status === 'pending') {
+    return { created: false, ...(await intentAnswer(active, booking, config, purpose)) };
   }
-  if (payment?.payment_status === 'failed') {
-    payment = await paymentRepository.updatePayment(payment.id, ['failed'], {
+
+  // A failed or cancelled try (card declined, customer pressed Cancel): reopen that same payment row.
+  const latest = await paymentRepository.getPaymentByBookingAndPurpose(bookingId, purpose);
+  if (latest?.payment_status === 'failed') {
+    const reopened = await paymentRepository.updatePayment(latest.id, ['failed'], {
       payment_status: 'pending',
       amount,
       transaction_reference: null,
-      gateway_response_raw: null
+      gateway_response_raw: null,
+      ...(latest.idempotency_key ? {} : { idempotency_key: idempotencyKey })
     });
+    return { created: false, ...(await intentAnswer(reopened, booking, config, purpose)) };
   }
-  if (!payment) {
+
+  // 3. A new payment, stored BEFORE the customer goes to PayFast.
+  let payment;
+  try {
     payment = await paymentRepository.createPayment({
       booking_id: bookingId,
       amount,
@@ -133,30 +193,18 @@ export const createPaymentIntent = async (actor, bookingId, purpose = 'booking_f
       gateway_provider: 'payfast',
       payment_status: 'pending',
       purpose,
-      method: 'card'
+      method: 'card',
+      idempotency_key: idempotencyKey
     });
-  }
-
-  try {
-    const checkout = await buildCheckout(payment, booking, config);
-    return {
-      paymentId: payment.id,
-      purpose,
-      amount,
-      currency: 'ZAR',
-      status: payment.payment_status,
-      sandbox: payfast.isSandbox(),
-      // Open this in a browser; it posts the signed form to PayFast. Then poll GET /payments/:paymentId.
-      checkoutUrl: checkoutLink(payment.id),
-      redirectUrl: checkout.url,
-      fields: checkout.payload
-    };
   } catch (error) {
-    if (payment.payment_status === 'pending') {
-      await paymentRepository.updatePayment(payment.id, ['pending'], { payment_status: 'failed' });
-    }
-    throw error;
+    if (!(error instanceof DuplicatePaymentError)) throw error;
+    // Another request made it a moment ago: answer with that one.
+    payment = (idempotencyKey && await paymentRepository.getPaymentByIdempotencyKey(idempotencyKey))
+      || await paymentRepository.getActivePayment(bookingId, purpose);
+    if (!payment) throw error;
+    return { created: false, ...(await intentAnswer(payment, booking, config, purpose)) };
   }
+  return { created: true, ...(await intentAnswer(payment, booking, config, purpose)) };
 };
 
 /**
@@ -180,30 +228,29 @@ const createPayoutForBooking = async (booking, cashCollected = 0) => {
 };
 
 /** Apply a confirmed card payment to its booking. */
-const applyPaidPayment = async (payment) => {
+/**
+ * After apply_payfast_payment() marked the payment, receipt and booking paid (one transaction): the follow-ups.
+ * Runs only for the ITN that actually applied the payment, so never twice.
+ */
+const afterCardPayment = async (payment) => {
   const booking = await paymentRepository.getBookingById(payment.booking_id);
   if (payment.purpose === 'balance') {
-    await paymentRepository.updateBookingPaymentState(booking.id, {}, {
-      balance_status: 'paid',
-      balance_payment_method: 'card'
-    });
     await createPayoutForBooking(booking, 0);
     await notifyBookingEvent('balancePaid', booking.id, { method: 'card' });
-  } else {
-    await paymentRepository.updateBookingPaymentState(booking.id, {}, { booking_fee_status: 'paid' });
-    if (booking.status !== 'pending') {
-      // Paid from an old checkout tab after the booking was cancelled/declined: give the money back.
-      try {
-        // eslint-disable-next-line no-use-before-define -- defined below; only called later, at run time
-        await refundBookingFee({ ...booking, booking_fee_status: 'paid' });
-      } catch (error) {
-        logger.error({ err: error, bookingId: booking.id }, 'Late booking fee could not be refunded; needs admin follow-up');
-      }
-      return;
-    }
-    // Only now can the provider accept, so this is when they hear about the request.
-    await notifyBookingEvent('requested', booking.id);
+    return;
   }
+  if (booking.status !== 'pending') {
+    // Paid from an old checkout tab after the booking was cancelled/declined: give the money back.
+    try {
+      // eslint-disable-next-line no-use-before-define -- defined below; only called later, at run time
+      await refundBookingFee({ ...booking, booking_fee_status: 'paid' });
+    } catch (error) {
+      logger.error({ err: error, bookingId: booking.id }, 'Late booking fee could not be refunded; needs admin follow-up');
+    }
+    return;
+  }
+  // Only now can the provider accept, so this is when they hear about the request.
+  await notifyBookingEvent('requested', booking.id);
 };
 
 /**
@@ -353,15 +400,22 @@ export const processPayFastItn = async (notification, sourceIp) => {
   }
 
   if (notification.payment_status === 'COMPLETE') {
-    const updated = await paymentRepository.updatePayment(payment.id, ['pending'], {
-      payment_status: 'paid',
-      transaction_reference: notification.pf_payment_id || null,
-      gateway_response_raw: notification,
-      paid_at: new Date().toISOString()
-    });
-    await paymentRepository.createReceipt(payment.id);
-    await applyPaidPayment(updated);
-    return { accepted: true, processed: true, payment: updated };
+    // Payment + receipt + booking in one transaction; a repeated or simultaneous ITN finds it already paid.
+    const result = await paymentRepository.applyPayfastPayment(
+      payment.id,
+      notification.pf_payment_id || null,
+      callbackAmount,
+      notification
+    );
+    if (result?.outcome === 'amount_mismatch') {
+      throw new ConflictError('PayFast amount does not match the payment record');
+    }
+    if (result?.outcome !== 'paid') {
+      logger.info({ paymentId: payment.id, outcome: result?.outcome }, 'PayFast ITN ignored (already handled)');
+      return { accepted: true, processed: false, duplicate: true };
+    }
+    await afterCardPayment(payment);
+    return { accepted: true, processed: true, payment: { ...payment, payment_status: 'paid' } };
   }
 
   if (['FAILED', 'CANCELLED'].includes(notification.payment_status)) {
