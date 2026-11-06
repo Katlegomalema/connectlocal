@@ -98,6 +98,12 @@ describe('Auth service', () => {
       .rejects.toMatchObject({ statusCode: 429, message: expect.stringContaining('confirmation emails') });
   });
 
+  test('Supabase failing to send the email (bad SMTP settings) is a 502, not "wrong login" 401', async () => {
+    supabase.auth.signUp.mockResolvedValue({ data: {}, error: { status: 500, message: 'Error sending confirmation email' } });
+    await expect(authService.registerUser('p@example.test', 'Longpass11!', { fullName: 'Pat Doe', role: 'customer' }))
+      .rejects.toMatchObject({ statusCode: 502, message: expect.stringContaining('confirmation email') });
+  });
+
   test('sign-up never accepts the admin role', async () => {
     await expect(authService.registerUser('p@example.test', 'StrongPassword123!', { fullName: 'Pat Doe', role: 'admin' }))
       .rejects.toMatchObject({ statusCode: 400 });

@@ -11,8 +11,10 @@ import {
 } from '../config/business.js';
 import { generateOtp, hashOtp, hashesMatch } from '../utils/secureCodes.js';
 import {
-  AppError, AuthenticationError, AuthorizationError, ConflictError, NotFoundError, RateLimitError, ValidationError
+  AppError, AuthenticationError, AuthorizationError, ConflictError, ExternalServiceError, NotFoundError,
+  RateLimitError, ValidationError
 } from '../utils/errors.js';
+import logger from '../utils/logger.js';
 
 /**
  * Load the app profile. If Supabase says the email is confirmed (e.g. the user clicked the email link,
@@ -41,9 +43,9 @@ const authError = (error, fallback) => {
       ? 'Choose a stronger password: add a symbol, for example ! or #.'
       : 'Choose a stronger password.');
   }
- /* if (code === 'over_email_send_rate_limit') {
- return new RateLimitError('We cannot send more confirmation emails right now. Please try again in an hour.');
-  }*/
+  if (code === 'over_email_send_rate_limit') {
+    return new RateLimitError('We cannot send more confirmation emails right now. Please try again in an hour.');
+  }
   if (['user_already_exists', 'email_exists'].includes(code)) return new ConflictError('This email is already registered');
   if (code === 'email_not_confirmed') {
     return new AppError('Please confirm your email address first (check your inbox).', 403, 'EMAIL_NOT_CONFIRMED');
@@ -51,6 +53,13 @@ const authError = (error, fallback) => {
   if (code.startsWith('over_') || status === 429) return new RateLimitError();
   if (code === 'email_address_invalid' || code === 'validation_failed') {
     return new ValidationError(error.message || 'Invalid email address');
+  }
+  // 5xx = Supabase itself failed (e.g. "Error sending confirmation email": the SMTP settings in Dashboard ->
+  // Authentication -> Emails are wrong). Not the person's fault, so not a 401.
+  if (status >= 500) {
+    return new ExternalServiceError(/email/i.test(error.message || '')
+      ? 'We could not send the confirmation email. Please try again later.'
+      : 'The sign-in service is not available right now. Please try again later.', 'supabase-auth');
   }
   return new AuthenticationError(fallback);
 };
@@ -81,16 +90,10 @@ export const registerUser = async (email, password, userData) => {
     }
   });
   if (error) {
-  console.error('SUPABASE REGISTRATION ERROR:', {
-    message: error.message,
-    code: error.code,
-    status: error.status,
-    details: error.details,
-    hint: error.hint
-  });
-
-  throw authError(error, 'Registration failed');
-}
+    // The real cause (e.g. SMTP failure) for the server log; never the password or keys.
+    logger.warn({ authCode: error.code, authStatus: error.status, authMessage: error.message }, 'Supabase sign-up failed');
+    throw authError(error, 'Registration failed');
+  }
   if (!data.user) throw new AuthenticationError('Registration failed');
   // With email confirmation on, Supabase answers an already-registered email with a user that has no
   // identities (and sends nothing).
