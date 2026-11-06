@@ -41,9 +41,9 @@ const authError = (error, fallback) => {
       ? 'Choose a stronger password: add a symbol, for example ! or #.'
       : 'Choose a stronger password.');
   }
-  if (code === 'over_email_send_rate_limit') {
-    return new RateLimitError('We cannot send more confirmation emails right now. Please try again in an hour.');
-  }
+ /* if (code === 'over_email_send_rate_limit') {
+ return new RateLimitError('We cannot send more confirmation emails right now. Please try again in an hour.');
+  }*/
   if (['user_already_exists', 'email_exists'].includes(code)) return new ConflictError('This email is already registered');
   if (code === 'email_not_confirmed') {
     return new AppError('Please confirm your email address first (check your inbox).', 403, 'EMAIL_NOT_CONFIRMED');
