@@ -1,10 +1,10 @@
-import 'dart:math';
 
 /// Free, offline checks that really work (no paid services needed).
 /// Each one is a stand-in for a paid lookup that can be added later:
 ///  * South African ID number  -> Home Affairs / Smile ID
 ///  * Company registration no. -> CIPC lookup
 ///  * Phone code              -> an SMS provider
+library;
 
 // ---------------------------------------------------------------------------
 // South African ID number: 13 digits YYMMDD SSSS C A Z
@@ -90,50 +90,8 @@ String? checkRegistrationNumber(String value) {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// One-time codes (phone verification). The code is created and checked here,
-// so a wrong code is really rejected. With no SMS provider, the "SMS" is shown
-// inside the app (see DemoSms). A backend replaces [OtpService].
-// ---------------------------------------------------------------------------
-enum OtpCheck { ok, wrong, expired, tooManyTries, noCode }
-
-class OtpService {
-  OtpService._();
-  static final OtpService instance = OtpService._();
-
-  static const _validFor = Duration(minutes: 5);
-  static const _maxTries = 5;
-
-  String? _phone;
-  String? _code;
-  DateTime? _expires;
-  int _tries = 0;
-
-  /// Creates a new 6-digit code for [phone] and returns it (to be "sent").
-  String send(String phone) {
-    final r = Random.secure();
-    _code = (100000 + r.nextInt(900000)).toString();
-    _phone = phone;
-    _expires = DateTime.now().add(_validFor);
-    _tries = 0;
-    return _code!;
-  }
-
-  OtpCheck check(String phone, String entered) {
-    if (_code == null || _phone != phone) return OtpCheck.noCode;
-    if (_tries >= _maxTries) return OtpCheck.tooManyTries;
-    if (DateTime.now().isAfter(_expires!)) return OtpCheck.expired;
-    if (entered.trim() != _code) {
-      _tries++;
-      return _tries >= _maxTries ? OtpCheck.tooManyTries : OtpCheck.wrong;
-    }
-    _code = null; // single use
-    return OtpCheck.ok;
-  }
-
-  int get triesLeft => _maxTries - _tries;
-}
-
+// Phone verification codes are created and checked by the backend (POST /auth/phone/request-otp and
+// /auth/phone/verify-otp); see features/auth/api_auth_service.dart.
 
 // ---------------------------------------------------------------------------
 // Bank details for payouts (free, offline checks).
@@ -188,4 +146,13 @@ bool bankNameMatches(String holder, {required String personName, String business
   final biz = _nameTokens(businessName);
   if (biz.isNotEmpty && biz.every(h.contains)) return true;
   return false;
+}
+
+/// A business name needs at least one letter and may contain letters (any language), digits, spaces and
+/// & . , ' ( ) - (e.g. "Pat's Plumbing (Pty) Ltd"). The backend applies the same rule.
+bool isValidBusinessName(String value) {
+  final name = value.trim();
+  return name.length >= 2 &&
+      name.length <= 150 &&
+      RegExp(r"^(?=.*\p{L})[\p{L}\p{N}\s&.,'()\-]+$", unicode: true).hasMatch(name);
 }

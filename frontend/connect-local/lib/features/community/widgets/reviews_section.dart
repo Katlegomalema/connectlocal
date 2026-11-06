@@ -7,7 +7,7 @@ import 'ui_kit.dart';
 
 /// "Reviews" list: stars, comment, first name, service and date.
 class ReviewsSection extends StatelessWidget {
-  final List<Booking> reviews;
+  final List<ReviewItem> reviews;
   final String emptyText;
   const ReviewsSection({
     super.key,
@@ -28,8 +28,8 @@ class ReviewsSection extends StatelessWidget {
       ));
     }
     for (final b in reviews) {
-      final first = b.clientName.trim().split(RegExp(r'\s+')).first;
-      final comment = (b.review ?? '').trim();
+      final first = b.customerFirstName;
+      final comment = b.comment.trim();
       children.add(Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: AppCard(
@@ -40,12 +40,12 @@ class ReviewsSection extends StatelessWidget {
                 children: [
                   for (var i = 1; i <= 5; i++)
                     Icon(
-                      i <= (b.rating ?? 0) ? Icons.star_rounded : Icons.star_outline_rounded,
+                      i <= b.rating ? Icons.star_rounded : Icons.star_outline_rounded,
                       size: 20,
                       color: AppColors.orange,
                     ),
                   const Spacer(),
-                  Text(formatDate(b.dateTime),
+                  Text(formatDate(b.createdAt),
                       style: const TextStyle(fontSize: 12, color: AppColors.muted)),
                 ],
               ),
@@ -55,8 +55,13 @@ class ReviewsSection extends StatelessWidget {
                     style: const TextStyle(fontSize: 14, height: 1.4, color: AppColors.text)),
               ],
               const SizedBox(height: 8),
-              Text('$first · ${b.serviceName}',
+              Text(b.serviceName.isEmpty ? first : '$first · ${b.serviceName}',
                   style: const TextStyle(fontSize: 13, color: AppColors.muted)),
+              if ((b.providerResponse ?? '').trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text('Reply: ${b.providerResponse!.trim()}',
+                    style: const TextStyle(fontSize: 13, height: 1.4, color: AppColors.text)),
+              ],
             ],
           ),
         ),

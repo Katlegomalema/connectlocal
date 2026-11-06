@@ -4,6 +4,8 @@ import 'package:connect_local/features/community/state/app_state.dart';
 import 'package:connect_local/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/fake_auth_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<List<TextField>> openRegister(WidgetTester tester, Size size) async {
@@ -12,7 +14,7 @@ Future<List<TextField>> openRegister(WidgetTester tester, Size size) async {
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   final app = AppState();
-  authService = LocalAuthService(app);
+  authService = FakeAuthService();
   await tester.pumpWidget(ConnectLocalApp(appState: app));
   await tester.pump(const Duration(seconds: 5)); // splash
   await tester.pumpAndSettle();
@@ -56,7 +58,7 @@ void main() {
     expect(RegisterScreenRules.problem('longpass1!'), contains('capital'));
     expect(RegisterScreenRules.problem('LONGPASS1!'), contains('small'));
     expect(RegisterScreenRules.problem('Longpass!!'), contains('number'));
-    expect(RegisterScreenRules.problem('Longpass11'), contains('symbol'));
+    expect(RegisterScreenRules.problem('Longpass11'), isNull, reason: 'no symbol needed: 8+, capital, small, number');
     expect(RegisterScreenRules.problem('Longpass1!'), isNull);
   });
 

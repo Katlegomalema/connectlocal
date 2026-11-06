@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/validators.dart';
+
 import '../../community/models/models.dart';
 import '../../community/state/app_state.dart';
 import '../../community/theme/app_theme.dart';
@@ -120,9 +122,15 @@ class _ApplicationReviewScreenState extends State<ApplicationReviewScreen> {
     );
     controller.dispose();
     if (reason == null || !mounted) return;
+    final problem = Validators.text(reason, min: 3, max: 1000, label: 'The reason');
+    if (problem != null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(problem)));
+      return;
+    }
     if (reason.isEmpty) {
       ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('Please give a reason')));
+          .showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('Please give a reason')));
       return;
     }
     await _decide(app, a, ApplicationStatus.rejected, reason: reason);
@@ -211,7 +219,11 @@ class _ApplicationReviewScreenState extends State<ApplicationReviewScreen> {
                         ),
                         const SizedBox(height: 8),
                         _row('Email', a.email),
-                        _row('Category', a.services),
+                        _row(
+                            'Category',
+                            AppState.kCategories.any((c) => c.toLowerCase() == a.services.trim().toLowerCase())
+                                ? a.services
+                                : '${a.services} (not one of the 10 ConnectLocal categories)'),
                         _row('Location', a.location),
                         _row('Applied', a.appliedLabel),
                         _row('Description', a.description),
@@ -268,7 +280,7 @@ class _ApplicationReviewScreenState extends State<ApplicationReviewScreen> {
                       child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         itemCount: a.photos.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 10),
+                        separatorBuilder: (_, _) => const SizedBox(width: 10),
                         itemBuilder: (_, i) => GestureDetector(
                           onTap: () => showPhotoViewer(context, a.photos, initialIndex: i),
                           child: ClipRRect(

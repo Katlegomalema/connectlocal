@@ -9,19 +9,20 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken, requireRole } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validation.js';
 import * as reviewService from '../services/reviewService.js';
+import { textSchema } from '../utils/validators.js';
 
 const router = express.Router();
 const createReviewSchema = z.object({
   bookingId: z.string().min(1),
   rating: z.coerce.number().int().min(1).max(5),
-  comment: z.string().max(500).optional()
+  comment: textSchema(500, { label: 'Your review' }).optional()
 }).strict();
 const updateReviewSchema = z.object({
   rating: z.coerce.number().int().min(1).max(5)
     .optional(),
-  comment: z.string().max(500).optional()
+  comment: textSchema(500, { label: 'Your review' }).optional()
 }).strict();
-const replySchema = z.object({ response: z.string().min(1).max(500) }).strict();
+const replySchema = z.object({ response: textSchema(500, { min: 1, label: 'Your reply' }) }).strict();
 
 /**
  * POST /api/v1/reviews

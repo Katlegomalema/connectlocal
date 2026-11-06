@@ -4,6 +4,9 @@
  */
 
 import * as reviewRepository from '../repositories/reviewRepository.js';
+import { notifyBookingEvent } from './bookingNotifier.js';
+import * as notificationService from './notificationService.js';
+import * as providerRepository from '../repositories/providerRepository.js';
 import { AuthorizationError, ConflictError, ValidationError } from '../utils/errors.js';
 
 const parsePagination = (pageValue, limitValue) => {
@@ -39,12 +42,27 @@ export const createReview = async (actor, { bookingId, rating, comment }) => {
     is_flagged: false
   });
   await reviewRepository.refreshProviderRating(booking.provider_id);
+  await notifyBookingEvent('reviewed', booking.id, { rating: Number(rating) });
   return review;
 };
 
+/** Public view of a review: the customer's first name only (no ids, no surname). */
+export const publicReview = (review) => ({
+  id: review.id,
+  bookingId: review.booking_id,
+  rating: review.rating,
+  comment: review.review_text,
+  customerFirstName: String(review.customer?.full_name || 'Customer').trim().split(/\s+/)[0],
+  serviceName: review.booking?.service?.service_name ?? null,
+  providerResponse: review.provider_response_text,
+  providerResponseAt: review.provider_response_at,
+  createdAt: review.created_at
+});
+
 export const getProviderReviews = async (providerId, pageValue, limitValue) => {
   const { page, limit } = parsePagination(pageValue, limitValue);
-  return reviewRepository.listVisibleReviews(providerId, page, limit);
+  const result = await reviewRepository.listVisibleReviews(providerId, page, limit);
+  return { ...result, reviews: result.reviews.map(publicReview) };
 };
 
 export const updateReview = async (actor, reviewId, { rating, comment }) => {
@@ -103,11 +121,22 @@ export const hideReview = async (reviewId) => {
   return review;
 };
 
+/**
+ * Someone reports a review. It stays visible: the admins are told and decide (POST /admin/reviews/:id/hide).
+ * (Before, one report hid the review straight away, so a provider could hide every bad review.)
+ */
 export const reportReview = async (actor, reviewId) => {
   if (!actor?.id) throw new AuthorizationError('Authentication required');
-  const review = await reviewRepository.reportReview(reviewId);
-  await reviewRepository.refreshProviderRating(review.provider_id);
-  return review;
+  const review = await reviewRepository.getReviewById(reviewId);
+  const adminIds = await providerRepository.listAdminUserIds();
+  await Promise.all(adminIds.map((adminId) => notificationService.sendInAppNotification(adminId, {
+    type: 'review',
+    title: 'Review reported',
+    body: 'A review was reported. Check it in the admin site and hide it if it breaks the rules.',
+    relatedEntityType: 'review',
+    relatedEntityId: review.id
+  }).catch(() => null)));
+  return { id: review.id, reported: true };
 };
 
 export default {

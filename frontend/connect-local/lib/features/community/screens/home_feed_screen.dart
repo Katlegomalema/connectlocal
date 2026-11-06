@@ -3,6 +3,7 @@ import '../../shared/brand.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
+import '../utils/category_icons.dart';
 import '../utils/format.dart';
 import '../widgets/application_banner.dart';
 import '../widgets/common_widgets.dart';
@@ -41,16 +42,6 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
 
   void _openProfile(ProviderModel p) =>
       _push(ProviderProfileScreen(providerId: p.id));
-
-  static const _categoryIcons = <String, IconData>{
-    'ALL': Icons.apps_rounded,
-    'Home Repair': Icons.handyman_rounded,
-    'Cleaning': Icons.cleaning_services_rounded,
-    'Beauty': Icons.spa_rounded,
-    'Tutoring': Icons.school_rounded,
-    'Gardening': Icons.yard_rounded,
-    'Security': Icons.shield_rounded,
-  };
 
   @override
   Widget build(BuildContext context) {
@@ -135,10 +126,10 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
                     child: ListView.separated(
                       scrollDirection: Axis.horizontal,
                       itemCount: _categories.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 16),
+                      separatorBuilder: (_, _) => const SizedBox(width: 16),
                       itemBuilder: (_, i) => _CategoryTile(
                         label: _categories[i] == 'ALL' ? 'All' : _categories[i],
-                        icon: _categoryIcons[_categories[i]] ?? Icons.category_rounded,
+                        icon: categoryIcon(_categories[i]),
                         active: _categories[i] == _category,
                         onTap: () => setState(() => _category = _categories[i]),
                       ),

@@ -23,8 +23,12 @@ import paymentRoutes from './routes/payment.js';
 import adminRoutes from './routes/admin.js';
 import notificationRoutes from './routes/notification.js';
 import uploadRoutes from './routes/uploads.js';
+import geoRoutes from './routes/geo.js';
 
 const app = express();
+// One proxy in front of us (Codespaces port forwarding / a hosting load balancer): req.ip is then the real
+// caller, which the rate limits count per person instead of putting everyone in one bucket.
+app.set('trust proxy', 1);
 
 // Middleware: Logging
 // Short request logs: method, path (no query string, it can carry tokens), status, time.
@@ -68,6 +72,7 @@ app.use('/api/v1/payments', paymentRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/uploads', uploadRoutes);
+app.use('/api/v1/geo', geoRoutes);
 
 // Middleware: 404 handler
 app.use(notFoundHandler);

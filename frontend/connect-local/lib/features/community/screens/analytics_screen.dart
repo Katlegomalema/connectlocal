@@ -29,7 +29,7 @@ class AnalyticsScreen extends StatelessWidget {
         ? app.totalEarned
         : bookings
             .where((b) => b.status == BookingStatus.completed)
-            .fold<int>(0, (sum, b) => sum + b.price);
+            .fold<double>(0, (sum, b) => sum + b.price);
     final thisMonth = s == null
         ? app.activeProvider.services.fold<int>(0, (sum, x) => sum + app.bookingsThisMonth(x))
         : app.bookingsThisMonth(s);

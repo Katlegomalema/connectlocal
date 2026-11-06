@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import '../../shared/validators.dart';
 import '../../shared/brand.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
@@ -6,7 +10,8 @@ import '../theme/app_theme.dart';
 import '../utils/format.dart';
 import '../widgets/ui_kit.dart';
 
-/// Chat thread attached to a booking. Works for both customer and provider.
+/// Chat thread attached to a booking (customer <-> provider), stored on the server. While open it checks
+/// for new messages every few seconds.
 class ChatScreen extends StatefulWidget {
   final Booking booking;
   final bool viewerIsProvider;
@@ -20,27 +25,66 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _ctrl = TextEditingController();
   final _scroll = ScrollController();
+  Timer? _poll;
+  bool _loading = true;
+  bool _sending = false;
+  String? _error;
+  int _shown = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    _poll = Timer.periodic(const Duration(seconds: 5), (_) => _load());
+  }
 
   @override
   void dispose() {
+    _poll?.cancel();
     _ctrl.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
-  void _send() {
-    final text = _ctrl.text.trim();
-    if (text.isEmpty) return;
-    AppScope.read(context).sendMessage(widget.booking.id, text,
-        fromProvider: widget.viewerIsProvider);
-    _ctrl.clear();
+  Future<void> _load() async {
+    if (!mounted) return;
+    final error = await AppScope.read(context).loadChat(widget.booking.id);
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _error = error;
+    });
+  }
+
+  void _scrollToEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
         _scroll.animateTo(_scroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut);
+            duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
       }
     });
+  }
+
+  Future<void> _send() async {
+    final text = _ctrl.text.trim();
+    if (text.isEmpty || _sending) return;
+    final problem = Validators.text(text, max: 2000, label: 'Your message');
+    if (problem != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(problem)));
+      return;
+    }
+    setState(() => _sending = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final error = await AppScope.read(context).sendMessage(widget.booking.id, text);
+    if (!mounted) return;
+    setState(() => _sending = false);
+    if (error != null) {
+      // Keep the text so nothing typed is lost.
+      messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(error)));
+      return;
+    }
+    _ctrl.clear();
+    _scrollToEnd();
   }
 
   @override
@@ -51,6 +95,10 @@ class _ChatScreenState extends State<ChatScreen> {
         ? b.clientName
         : app.providerById(b.providerId).name;
     final messages = app.chatFor(b.id);
+    if (messages.length != _shown) {
+      _shown = messages.length;
+      _scrollToEnd();
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -73,18 +121,20 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             Expanded(
               child: messages.isEmpty
-                  ? const EmptyState(
-                      icon: Icons.chat_bubble_outline_rounded,
-                      title: 'No messages yet',
-                      message: 'Say hello!',
-                    )
+                  ? (_loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : EmptyState(
+                          icon: _error == null ? Icons.chat_bubble_outline_rounded : Icons.cloud_off_rounded,
+                          title: _error == null ? 'No messages yet' : 'Messages could not be loaded',
+                          message: _error ?? 'Say hello!',
+                        ))
                   : ListView.builder(
                       controller: _scroll,
                       padding: const EdgeInsets.all(16),
                       itemCount: messages.length,
                       itemBuilder: (_, i) {
                         final m = messages[i];
-                        final mine = m.fromProvider == widget.viewerIsProvider;
+                        final mine = m.mine;
                         return Align(
                           alignment: mine
                               ? Alignment.centerRight
@@ -130,6 +180,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: TextField(
                       controller: _ctrl,
+                      maxLength: 2000,
+                      buildCounter: (_, {required currentLength, required isFocused, maxLength}) => null,
                       onSubmitted: (_) => _send(),
                       style: const TextStyle(fontSize: 14),
                       decoration: InputDecoration(
@@ -150,8 +202,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   IconButton(
                     tooltip: 'Send',
-                    onPressed: _send,
-                    icon: const Icon(Icons.send, color: AppColors.teal),
+                    onPressed: _sending ? null : _send,
+                    icon: _sending
+                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.send, color: AppColors.teal),
                   ),
                 ],
               ),

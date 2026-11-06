@@ -109,11 +109,38 @@ export const listConversations = async (userId, limit = 50) => {
         participant_id: message.sender_id === userId ? message.receiver_id : message.sender_id,
         last_message: message.message_text,
         last_message_at: message.created_at,
-        is_read: message.is_read
+        last_message_mine: message.sender_id === userId,
+        is_read: message.is_read,
+        unread_count: 0
       });
     }
+    if (message.receiver_id === userId && !message.is_read) latest.get(message.conversation_id).unread_count += 1;
   }
   return [...latest.values()].slice(0, limit);
+};
+
+/** All messages of a booking's chat that [userId] sent or received, oldest first. */
+export const listBookingMessages = async (bookingId, userId, limit = 200) => {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('id, conversation_id, booking_id, sender_id, receiver_id, message_text, is_read, created_at')
+    .eq('booking_id', bookingId)
+    .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data || []).reverse();
+};
+
+/** Marks everything [userId] received in this booking's chat as read. */
+export const markBookingMessagesRead = async (bookingId, userId) => {
+  const { error } = await supabase
+    .from('messages')
+    .update({ is_read: true })
+    .eq('booking_id', bookingId)
+    .eq('receiver_id', userId)
+    .eq('is_read', false);
+  if (error) throw error;
 };
 
 export const createMessage = async (message) => {
@@ -187,6 +214,8 @@ export default {
   findConversation,
   findConversationBetween,
   listConversations,
+  listBookingMessages,
+  markBookingMessagesRead,
   createMessage,
   listMessages,
   getMessageById,

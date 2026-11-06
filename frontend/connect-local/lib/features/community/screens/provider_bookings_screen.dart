@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../widgets/action_feedback.dart';
+
 import '../../shared/location_map.dart';
 
 import '../provider_ui/provider_booking_detail_screen.dart';
@@ -66,7 +68,7 @@ class _ProviderBookingsScreenState extends State<ProviderBookingsScreen> {
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
                       itemCount: bookings.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 14),
+                      separatorBuilder: (_, _) => const SizedBox(height: 14),
                       itemBuilder: (context, index) =>
                           _bookingCard(context, app, bookings[index]),
                     ),
@@ -105,14 +107,16 @@ class _ProviderBookingsScreenState extends State<ProviderBookingsScreen> {
               '${booking.serviceName} · ${booking.quantityLabel}',
           date: formatDate(booking.dateTime),
           time: formatTime(booking.dateTime),
-          location: booking.address.isEmpty
-              ? '${booking.distanceKm.toStringAsFixed(0)} km away'
-              : booking.address,
+          location: booking.atBusiness
+              ? 'Customer visits your business'
+              : booking.address.isEmpty
+                  ? 'House call, ${booking.distanceKm.toStringAsFixed(0)} km away'
+                  : 'House call: ${booking.address}',
           total: money(booking.price),
           notes: booking.notes,
           showActions: pending,
           onConfirm: pending ? () => confirmBooking(context, app, booking) : null,
-          onDecline: pending ? () => app.setStatus(booking, BookingStatus.declined) : null,
+          onDecline: pending ? () => runAction(context, app.setStatus(booking, BookingStatus.declined)) : null,
           completeLabel: confirmed && !booking.pinVerified
               ? 'Enter PIN to Verify & Start'
               : confirmed
@@ -125,21 +129,28 @@ class _ProviderBookingsScreenState extends State<ProviderBookingsScreen> {
                   if (booking.pinVerified && context.mounted) Navigator.pop(context);
                 }
               : confirmed
-                  ? () {
-                      app.completeJob(booking);
-                      Navigator.pop(context);
+                  ? () async {
+                      final navigator = Navigator.of(context);
+                      if (await runAction(context, app.completeJob(booking), success: 'Job marked as complete')) navigator.pop();
                     }
                   : (booking.status == BookingStatus.completed &&
                           !booking.balancePaid &&
                           booking.serviceMethod == PayMethod.cash)
-                      ? () {
-                          app.confirmCashReceived(booking);
-                          Navigator.pop(context);
+                      ? () async {
+                          final navigator = Navigator.of(context);
+                          if (await runAction(context, app.confirmCashReceived(booking), success: 'Cash payment recorded')) {
+                            navigator.pop();
+                          }
                         }
                       : null,
           onChat: () => _openChat(context, booking),
-          onDirections: () => openDirectionsTo(context,
-              lat: booking.latitude, lng: booking.longitude, address: booking.address),
+          customerLatitude: booking.atBusiness ? null : booking.latitude,
+          customerLongitude: booking.atBusiness ? null : booking.longitude,
+          // Directions only for a house call (for a visit, the customer comes to you).
+          onDirections: booking.atBusiness
+              ? null
+              : () => openDirectionsTo(context,
+                  lat: booking.latitude, lng: booking.longitude, address: booking.address),
         ),
       ),
     );
@@ -181,7 +192,7 @@ class _ProviderBookingsScreenState extends State<ProviderBookingsScreen> {
                       label: 'Decline',
                       color: AppColors.red,
                       outlined: true,
-                      onPressed: () => app.setStatus(booking, BookingStatus.declined),
+                      onPressed: () => runAction(context, app.setStatus(booking, BookingStatus.declined)),
                     ),
                   ),
                 ],
@@ -198,7 +209,7 @@ class _ProviderBookingsScreenState extends State<ProviderBookingsScreen> {
                     child: PillButton(
                       label: 'Complete job',
                       color: AppColors.green,
-                      onPressed: () => app.completeJob(booking),
+                      onPressed: () => runAction(context, app.completeJob(booking), success: 'Job marked as complete'),
                     ),
                   ),
                 if (awaitingPayment && booking.serviceMethod == PayMethod.cash)
@@ -206,7 +217,7 @@ class _ProviderBookingsScreenState extends State<ProviderBookingsScreen> {
                     child: PillButton(
                       label: 'Cash received',
                       color: AppColors.green,
-                      onPressed: () => app.confirmCashReceived(booking),
+                      onPressed: () => runAction(context, app.confirmCashReceived(booking), success: 'Cash payment recorded'),
                     ),
                   ),
                 if (awaitingPayment && booking.serviceMethod != PayMethod.cash)

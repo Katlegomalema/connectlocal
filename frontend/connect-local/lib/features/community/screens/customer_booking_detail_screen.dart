@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/validators.dart';
+
+import '../widgets/action_feedback.dart';
+
 import '../../booking/screens/payment_method_screen.dart';
+import '../../booking/screens/payment_processing_screen.dart';
 import '../../shared/brand.dart';
-import '../../shared/location_map.dart';
+import '../../shared/booking_maps.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
 import '../theme/app_theme.dart';
@@ -41,6 +46,9 @@ class CustomerBookingDetailScreen extends StatelessWidget {
     final needsPayment = b.status == BookingStatus.completed &&
         !b.balancePaid &&
         b.serviceMethod == null;
+    // A request whose 15% booking fee was never confirmed (app closed or network lost during PayFast):
+    // finish paying it. The server returns the same payment, so this never charges twice.
+    final feeUnpaid = b.status == BookingStatus.pending && !app.feePaid(b) && !b.feeRefunded;
     // Can't cancel once the provider has been verified and the job has started.
     final canCancel = b.status == BookingStatus.pending ||
         (b.status == BookingStatus.confirmed && !b.pinVerified);
@@ -103,8 +111,14 @@ class CustomerBookingDetailScreen extends StatelessWidget {
                       children: [
                         _detail(Icons.calendar_today_outlined, 'Date', formatDate(b.dateTime)),
                         _detail(Icons.schedule_rounded, 'Time', formatTime(b.dateTime)),
-                        _detail(Icons.location_on_outlined, 'Address',
-                            b.address.isEmpty ? 'Not provided' : b.address),
+                        _detail(b.atBusiness ? Icons.storefront_outlined : Icons.home_outlined, 'Type',
+                            b.locationTypeLabel),
+                        if (b.atBusiness)
+                          _detail(Icons.location_on_outlined, 'Business address',
+                              provider.address.isEmpty ? 'See the map below' : provider.address)
+                        else
+                          _detail(Icons.location_on_outlined, 'Your address',
+                              b.address.isEmpty ? 'Not provided' : b.address),
                         if (b.notes.isNotEmpty)
                           _detail(Icons.notes_rounded, 'Notes', b.notes),
                       ],
@@ -119,7 +133,7 @@ class CustomerBookingDetailScreen extends StatelessWidget {
                     child: Column(
                       children: [
                         _money(
-                          'Deposit (${(kBookingFeeRate * 100).round()}%, counts toward the price)',
+                          'Booking fee (${(kBookingFeeRate * 100).round()}%, counts toward the price)',
                           money(b.bookingFee),
                           b.feeRefunded
                               ? StatusChip('Refunded', color: AppColors.muted)
@@ -146,31 +160,23 @@ class CustomerBookingDetailScreen extends StatelessWidget {
                     ),
                   ),
 
-                  // ---- provider location ----
-                  if (provider.latitude != null && provider.longitude != null) ...[
+                  // ---- map: Business Location Map (visit) or Customer Location Map (house call) ----
+                  if (b.atBusiness && provider.hasBusinessLocation) ...[
                     const SizedBox(height: 22),
-                    const SectionTitle('Provider location'),
-                    const SizedBox(height: 10),
-                    LocationMap(
-                      height: 160,
-                      interactive: false,
-                      pins: [
-                        MapPin(
-                          id: provider.id,
-                          latitude: provider.latitude!,
-                          longitude: provider.longitude!,
-                          label: provider.name,
-                        ),
-                      ],
-                      onTap: () =>
-                          openDirections(context, provider.latitude!, provider.longitude!),
+                    BusinessLocationMap(
+                      businessId: provider.id,
+                      businessName: provider.name,
+                      address: provider.address,
+                      latitude: provider.latitude,
+                      longitude: provider.longitude,
                     ),
-                    const SizedBox(height: 10),
-                    OutlinedButton.icon(
-                      onPressed: () =>
-                          openDirections(context, provider.latitude!, provider.longitude!),
-                      icon: const Icon(Icons.directions_outlined, size: 20),
-                      label: const Text('Get directions to the provider'),
+                  ] else if (!b.atBusiness && b.latitude != null && b.longitude != null) ...[
+                    const SizedBox(height: 22),
+                    CustomerLocationMap(
+                      latitude: b.latitude!,
+                      longitude: b.longitude!,
+                      title: 'Where the provider will come',
+                      address: b.address,
                     ),
                   ],
                   const SizedBox(height: 18),
@@ -196,16 +202,25 @@ class CustomerBookingDetailScreen extends StatelessWidget {
                 ],
               ),
             ),
-            if (needsPayment || canReview)
+            if (needsPayment || canReview || feeUnpaid)
               Container(
                 padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
                 decoration: const BoxDecoration(
                   color: Colors.white,
                   border: Border(top: BorderSide(color: AppColors.hairline)),
                 ),
-                child: needsPayment
+                child: feeUnpaid
                     ? PrimaryButton(
-                        'Pay R${b.balance}',
+                        'Finish paying the ${money(b.bookingFee)} booking fee',
+                        icon: Icons.lock_outline_rounded,
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => PaymentProcessingScreen(feeFor: b)),
+                        ),
+                      )
+                    : needsPayment
+                    ? PrimaryButton(
+                        'Pay ${money(b.balance)}',
                         icon: Icons.lock_outline_rounded,
                         onPressed: () => Navigator.push(
                           context,
@@ -272,8 +287,8 @@ class CustomerBookingDetailScreen extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         title: const Text('Cancel this booking?'),
         content: Text(pending
-            ? 'Your deposit of R${b.bookingFee} will be refunded.'
-            : 'The provider already accepted, so the deposit of R${b.bookingFee} '
+            ? 'Your booking fee of ${money(b.bookingFee)} will be refunded.'
+            : 'The provider already accepted, so the booking fee of ${money(b.bookingFee)} '
                 'is non-refundable.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep booking')),
@@ -286,8 +301,9 @@ class CustomerBookingDetailScreen extends StatelessWidget {
       ),
     );
     if (yes != true || !context.mounted) return;
-    final message = app.cancelBooking(b);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(message)));
+    final messenger = ScaffoldMessenger.of(context);
+    final message = await app.cancelBooking(b);
+    messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 4), content: Text(message)));
   }
 
   /// Opens the star-rating sheet. Also used from the My Bookings list.
@@ -337,12 +353,13 @@ class CustomerBookingDetailScreen extends StatelessWidget {
     // The controller is not disposed on purpose: the sheet is still animating
     // closed here and disposing it now can throw "used after being disposed".
     final text = comment.text;
-    if (sent == true) {
-      app.addReview(b, rating: stars, comment: text);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('Thanks for your review!')));
-      }
+    final problem = Validators.text(text, max: 500, label: 'Your review');
+    if (sent == true && problem != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 4), content: Text(problem)));
+      return;
+    }
+    if (sent == true && context.mounted) {
+      await runAction(context, app.addReview(b, rating: stars, comment: text), success: 'Thanks for your review!');
     }
   }
 }
@@ -365,19 +382,19 @@ class _NextStep extends StatelessWidget {
         icon = Icons.hourglass_bottom_rounded;
         color = AppColors.orange;
         title = 'Waiting for the provider';
-        text = '$providerName will review your request. Your deposit of R${b.bookingFee} secures it; you pay the remaining R${b.balance} after the service is done.';
+        text = '$providerName will review your request. Your booking fee of ${money(b.bookingFee)} secures it; you pay the remaining ${money(b.balance)} after the service is done.';
       case BookingStatus.confirmed:
         if (b.pinVerified) {
           icon = Icons.handyman_outlined;
           color = AppColors.green;
           title = 'Service in progress';
-          text = '$providerName was verified with your PIN. When the job is finished you will be asked to pay the remaining R${b.balance}.';
+          text = '$providerName was verified with your PIN. When the job is finished you will be asked to pay the remaining ${money(b.balance)}.';
         } else {
           icon = Icons.check_circle_outline_rounded;
           color = AppColors.green;
           title = 'Booking secured';
-          text = '$providerName accepted your request and your deposit secured it. '
-              'Give them your PIN when they arrive. You pay the remaining R${b.balance} after the service.';
+          text = '$providerName accepted your request and your booking fee secured it. '
+              'Give them your PIN when they arrive. You pay the remaining ${money(b.balance)} after the service.';
         }
       case BookingStatus.completed:
         icon = Icons.verified_outlined;
@@ -388,10 +405,10 @@ class _NextStep extends StatelessWidget {
           text = 'You rated this job ${b.rating} out of 5.';
         } else if (!b.balancePaid && b.serviceMethod == PayMethod.cash) {
           title = 'Waiting for cash confirmation';
-          text = 'Pay R${b.balance} in cash to $providerName. They will confirm they received it.';
+          text = 'Pay ${money(b.balance)} in cash to $providerName. They will confirm they received it.';
         } else if (!b.balancePaid) {
           title = 'Job done: payment due';
-          text = 'Please pay the remaining R${b.balance} by card, Instant EFT or cash.';
+          text = 'Please pay the remaining ${money(b.balance)} by card, Instant EFT or cash.';
         } else {
           title = 'Job completed and paid';
           text = 'How did it go? Your review helps other customers.';
@@ -400,14 +417,14 @@ class _NextStep extends StatelessWidget {
         icon = Icons.info_outline_rounded;
         color = AppColors.red;
         title = 'Request declined';
-        text = '$providerName couldn’t take this booking. Your deposit of R${b.bookingFee} is refunded.';
+        text = '$providerName couldn’t take this booking. Your booking fee of ${money(b.bookingFee)} is refunded.';
       case BookingStatus.cancelled:
         icon = Icons.cancel_outlined;
         color = AppColors.muted;
         title = 'Booking cancelled';
         text = b.feeRefunded
-            ? 'Your deposit of R${b.bookingFee} is refunded.'
-            : 'The deposit is non-refundable once a provider has accepted.';
+            ? 'Your booking fee of ${money(b.bookingFee)} is refunded.'
+            : 'The booking fee is non-refundable once a provider has accepted.';
     }
     return Container(
       padding: const EdgeInsets.all(14),

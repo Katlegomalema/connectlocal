@@ -9,41 +9,57 @@ import '../widgets/common_widgets.dart';
 import '../widgets/ui_kit.dart';
 import 'chat_screen.dart';
 
-/// List of conversations (one per booking).
-class MessagesScreen extends StatelessWidget {
+/// List of conversations (one per booking), newest message first.
+class MessagesScreen extends StatefulWidget {
   final bool viewerIsProvider;
   const MessagesScreen({super.key, this.viewerIsProvider = true});
 
   @override
+  State<MessagesScreen> createState() => _MessagesScreenState();
+}
+
+class _MessagesScreenState extends State<MessagesScreen> {
+  bool get viewerIsProvider => widget.viewerIsProvider;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) AppScope.read(context).refreshConversations();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
+    DateTime lastActivity(Booking b) => app.conversationFor(b.id)?.lastAt ?? b.dateTime;
     final bookings = (viewerIsProvider ? app.providerBookings : app.customerBookings)
         .where((b) => b.status != BookingStatus.declined)
         .toList()
-      ..sort((a, b) {
-        final la = app.chatFor(a.id);
-        final lb = app.chatFor(b.id);
-        final ta = la.isEmpty ? a.dateTime : la.last.sentAt;
-        final tb = lb.isEmpty ? b.dateTime : lb.last.sentAt;
-        return tb.compareTo(ta);
-      });
+      ..sort((a, b) => lastActivity(b).compareTo(lastActivity(a)));
 
     return Scaffold(
       appBar: AppBar(title: const Text('Messages')),
       body: SafeArea(
-        child: bookings.isEmpty
-            ? const EmptyState(
-                icon: Icons.forum_outlined,
-                title: 'No conversations yet',
-                message: 'Messages about your bookings will appear here.',
-              )
+        child: RefreshIndicator(
+          onRefresh: () => app.refreshConversations(),
+          child: bookings.isEmpty
+            ? ListView(children: const [
+                SizedBox(height: 80),
+                EmptyState(
+                  icon: Icons.forum_outlined,
+                  title: 'No conversations yet',
+                  message: 'Messages about your bookings will appear here.',
+                ),
+              ])
             : ListView.separated(
+                physics: const AlwaysScrollableScrollPhysics(),
                 padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
                 itemCount: bookings.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                separatorBuilder: (_, _) => const SizedBox(height: 12),
                 itemBuilder: (_, i) {
                   final b = bookings[i];
-                  final msgs = app.chatFor(b.id);
+                  final last = app.conversationFor(b.id);
                   final name = viewerIsProvider
                       ? b.clientName
                       : app.providerById(b.providerId).name;
@@ -76,9 +92,9 @@ class MessagesScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                msgs.isEmpty
+                                last == null
                                     ? '${b.serviceName} · ${whenLabel(b.dateTime)}'
-                                    : msgs.last.text,
+                                    : '${last.lastMine ? 'You: ' : ''}${last.lastMessage}',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontSize: 13, color: AppColors.muted),
@@ -86,12 +102,25 @@ class MessagesScreen extends StatelessWidget {
                             ],
                           ),
                         ),
+                        if ((last?.unread ?? 0) > 0)
+                          Container(
+                            margin: const EdgeInsets.only(right: 4),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.teal,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text('${last!.unread}',
+                                style: const TextStyle(
+                                    fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+                          ),
                         const Icon(Icons.chevron_right, color: AppColors.muted),
                       ],
                     ),
                   );
                 },
               ),
+        ),
       ),
     );
   }

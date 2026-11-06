@@ -7,6 +7,7 @@ const repository = {
   getBookingById: jest.fn(),
   getConversationById: jest.fn(),
   findConversation: jest.fn(),
+  findConversationBetween: jest.fn(),
   createConversation: jest.fn(),
   listConversations: jest.fn(),
   createMessage: jest.fn(),
@@ -21,6 +22,15 @@ const messageService = await import('../../src/services/messageService.js');
 
 describe('Message service', () => {
   beforeEach(() => jest.clearAllMocks());
+
+  test('a conversation id from someone outside that conversation is refused', async () => {
+    repository.getUserById.mockResolvedValue({ id: 'customer-1', role: 'customer', is_active: true });
+    repository.findConversationBetween.mockResolvedValue(null);
+    repository.getConversationById.mockResolvedValue({ id: 'c-other', user_a_id: 'customer-1', user_b_id: 'provider-2' });
+    await expect(messageService.sendMessage({ id: 'provider-9', role: 'provider' },
+      { conversationId: 'c-other', receiverId: 'customer-1' }, 'hello')).rejects.toThrow('not a participant');
+    expect(repository.createMessage).not.toHaveBeenCalled();
+  });
 
   test('persists a message only for a conversation participant', async () => {
     repository.getConversationById.mockResolvedValue({

@@ -7,10 +7,8 @@ import '../../community/utils/format.dart';
 import '../../community/widgets/stat_card.dart';
 import '../../community/widgets/ui_kit.dart';
 
-/// Every payout to a provider, for the admin to see. Payouts are automatic
-/// (paid to the provider's saved bank account when the customer pays), so
-/// there is nothing for the admin to do here.
-/// TODO (backend): replace with PayFast payouts / split payments.
+/// Every payout to a provider (from the server). Payouts are automatic (sent to the provider's saved bank
+/// account once the balance is paid), so there is nothing for the admin to do here. Bank details are masked.
 class AdminPayoutsScreen extends StatelessWidget {
   const AdminPayoutsScreen({super.key});
 
@@ -75,8 +73,6 @@ class _PayoutTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final provider = app.providerById(p.providerId);
-    final account = app.payoutAccountFor(p.providerId);
     final isDue = p.status == PayoutStatus.due;
     return AppCard(
       child: Column(
@@ -89,7 +85,7 @@ class _PayoutTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(provider.name,
+                    Text(p.businessName ?? app.providerById(p.providerId).name,
                         style: const TextStyle(
                             fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.text)),
                     const SizedBox(height: 2),
@@ -121,15 +117,15 @@ class _PayoutTile extends StatelessWidget {
               color: AppColors.inputBg,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: account == null
+            child: p.bankLabel == null
                 ? const Text('No bank details yet – the provider has not added them.',
                     style: TextStyle(fontSize: 13, color: AppColors.red))
-                : Text(
-                    '${account.bank} · ${account.accountType}\n'
-                    '${account.holderName}\n'
-                    'Account ${account.accountNumber} · Branch ${account.branchCode}',
-                    style: const TextStyle(fontSize: 13, height: 1.4, color: AppColors.text)),
+                : Text(p.bankLabel!, style: const TextStyle(fontSize: 13, height: 1.4, color: AppColors.text)),
           ),
+          if (isDue && p.note != null) ...[
+            const SizedBox(height: 8),
+            Text(p.note!, style: const TextStyle(fontSize: 12, color: AppColors.orange)),
+          ],
           if (!isDue && p.reference != null) ...[
             const SizedBox(height: 8),
             Text('Paid ${p.paidAt == null ? '' : whenLabel(p.paidAt!)} · Ref ${p.reference}',

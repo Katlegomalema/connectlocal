@@ -6,6 +6,10 @@
 import { supabaseAdmin as supabase } from '../config/supabase.js';
 import { ConflictError, NotFoundError } from '../utils/errors.js';
 
+/** Booking + what the screens show: service name, business name, customer name/phone. */
+const BOOKING_SELECT = '*, service:services(service_name), provider:providers(business_name, user_id), '
+  + 'customer:users!bookings_customer_id_fkey(full_name, phone_number), review:reviews(id, rating, review_text)';
+
 const throwDatabaseError = (error) => {
   if (error.code === '23P01' || error.code === '23505') {
     throw new ConflictError('The provider time slot is no longer available');
@@ -16,7 +20,7 @@ const throwDatabaseError = (error) => {
 export const getBookingById = async (bookingId) => {
   const { data, error } = await supabase
     .from('bookings')
-    .select('*')
+    .select(BOOKING_SELECT)
     .eq('id', bookingId)
     .maybeSingle();
 
@@ -40,7 +44,8 @@ export const getServiceById = async (serviceId) => {
 export const getProviderById = async (providerId) => {
   const { data, error } = await supabase
     .from('providers')
-    .select('id, user_id, verification_status, is_active')
+    .select('id, user_id, verification_status, is_active, offers_visit, offers_house_call, slot_minutes, '
+      + 'street_address, suburb, city, location')
     .eq('id', providerId)
     .maybeSingle();
 
@@ -86,12 +91,18 @@ export const getProviderByUserId = async (userId) => {
   return data;
 };
 
+/** How long an unpaid request holds its time slot (the PayFast checkout link lives 30 minutes). */
+export const UNPAID_HOLD_MINUTES = 30;
+
 export const hasBookingConflict = async (providerId, scheduledStart, scheduledEnd, excludeBookingId) => {
+  const holdSince = new Date(Date.now() - UNPAID_HOLD_MINUTES * 60000).toISOString();
   let query = supabase
     .from('bookings')
     .select('id')
     .eq('provider_id', providerId)
     .in('status', ['pending', 'accepted', 'in_progress'])
+    // A pending request only blocks the slot once its fee is paid, or while its checkout is still open.
+    .or(`status.neq.pending,booking_fee_status.eq.paid,created_at.gt.${holdSince}`)
     .lt('scheduled_start', scheduledEnd)
     .gt('scheduled_end', scheduledStart)
     .limit(1);
@@ -103,11 +114,75 @@ export const hasBookingConflict = async (providerId, scheduledStart, scheduledEn
   return Boolean(data?.length);
 };
 
+/**
+ * The same customer's still-pending request for the same service and start time (a retried "Book", a double
+ * tap, the app reopened), or null. Returned instead of making a second booking (and a second booking fee).
+ */
+export const findPendingDuplicate = async ({
+  customerId, providerId, serviceId, scheduledStart
+}) => {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select(BOOKING_SELECT)
+    .eq('customer_id', customerId)
+    .eq('provider_id', providerId)
+    .eq('service_id', serviceId)
+    .eq('scheduled_start', scheduledStart)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+};
+
+/** The provider's working hours (provider_availability rows, day_of_week 0 = Sunday). */
+export const getProviderAvailability = async (providerId) => {
+  const { data, error } = await supabase
+    .from('provider_availability')
+    .select('day_of_week, start_time, end_time')
+    .eq('provider_id', providerId);
+  if (error) throw error;
+  return data || [];
+};
+
+/** Times held by this provider's bookings between [fromIso] and [toIso] (same rule as hasBookingConflict). */
+export const listBusyTimes = async (providerId, fromIso, toIso) => {
+  const holdSince = new Date(Date.now() - UNPAID_HOLD_MINUTES * 60000).toISOString();
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('scheduled_start, scheduled_end')
+    .eq('provider_id', providerId)
+    .in('status', ['pending', 'accepted', 'in_progress'])
+    .or(`status.neq.pending,booking_fee_status.eq.paid,created_at.gt.${holdSince}`)
+    .lt('scheduled_start', toIso)
+    .gt('scheduled_end', fromIso)
+    .order('scheduled_start')
+    .limit(500);
+  if (error) throw error;
+  return data || [];
+};
+
+/** True when an ACCEPTED or IN-PROGRESS booking of this provider overlaps [from, to) (other than [exclude]). */
+export const hasFirmConflict = async (providerId, fromIso, toIso, excludeBookingId) => {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('id')
+    .eq('provider_id', providerId)
+    .in('status', ['accepted', 'in_progress'])
+    .lt('scheduled_start', toIso)
+    .gt('scheduled_end', fromIso)
+    .neq('id', excludeBookingId)
+    .limit(1);
+  if (error) throw error;
+  return Boolean(data?.length);
+};
+
 export const createBooking = async (bookingData) => {
   const { data, error } = await supabase
     .from('bookings')
     .insert(bookingData)
-    .select('*')
+    .select(BOOKING_SELECT)
     .single();
 
   if (error) throwDatabaseError(error);
@@ -123,7 +198,7 @@ export const updateBooking = async (bookingId, allowedStatuses, updates, expecte
   // Optimistic concurrency: only update if these columns still have the values we read.
   for (const [column, value] of Object.entries(expected)) query = query.eq(column, value);
 
-  const { data, error } = await query.select('*').maybeSingle();
+  const { data, error } = await query.select(BOOKING_SELECT).maybeSingle();
 
   if (error) throwDatabaseError(error);
   if (!data) throw new ConflictError('Booking status changed; reload and try again');
@@ -135,7 +210,7 @@ export const listBookings = async ({
 }) => {
   let query = supabase
     .from('bookings')
-    .select('*', { count: 'exact' })
+    .select(BOOKING_SELECT, { count: 'exact' })
     .order('created_at', { ascending: false });
 
   if (customerId) query = query.eq('customer_id', customerId);
@@ -155,6 +230,10 @@ export const listBookings = async ({
 };
 
 export default {
+  listBusyTimes,
+  hasFirmConflict,
+  findPendingDuplicate,
+  getProviderAvailability,
   getBookingById,
   getServiceById,
   getProviderById,

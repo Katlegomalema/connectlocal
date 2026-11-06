@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+
+import 'map_tiles.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 const _teal = Color(0xFF1F5FA8);
 const _red = Color(0xFFE5251F);
 const _hairline = Color(0xFFE5E7EB);
+
+/// The blue dot = the customer's position (used by the map and by CustomerLocationMap).
+const kCustomerDotBlue = Color(0xFF2563EB);
 
 /// Opens the place in the phone's maps app (or the browser) with directions.
 Future<bool> openDirections(BuildContext context, double lat, double lng) =>
@@ -27,7 +32,7 @@ Future<bool> openDirectionsTo(
     destination = Uri.encodeComponent(address.trim());
   } else {
     ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('No location has been added yet.')));
+        .showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('No location has been added yet.')));
     return false;
   }
   final uri = Uri.parse(
@@ -38,7 +43,7 @@ Future<bool> openDirectionsTo(
   } catch (_) {}
   if (!ok && context.mounted) {
     ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('Couldn’t open maps on this device.')));
+        .showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('Couldn’t open maps on this device.')));
   }
   return ok;
 }
@@ -57,11 +62,8 @@ class MapPin {
   });
 }
 
-/// OpenStreetMap view with one or more provider pins and (optionally) the
-/// customer's own position. Tiles come from openstreetmap.org (free, no key).
-///
-/// For production traffic, OSM's tile server has a usage policy; switch the
-/// [urlTemplate] to a hosted tile provider when the app is released.
+/// Map view with one or more provider pins and (optionally) the customer's own position.
+/// Tiles and attribution: see map_tiles.dart.
 class LocationMap extends StatelessWidget {
   final List<MapPin> pins;
   final String? selectedId;
@@ -75,8 +77,6 @@ class LocationMap extends StatelessWidget {
   final bool interactive;
   final double height;
   final VoidCallback? onTap;
-
-  static const urlTemplate = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
   const LocationMap({
     super.key,
@@ -106,7 +106,7 @@ class LocationMap extends StatelessWidget {
             interactionOptions: InteractionOptions(
               flags: interactive ? InteractiveFlag.all : InteractiveFlag.none,
             ),
-            onTap: onTap == null ? null : (_, __) => onTap!(),
+            onTap: onTap == null ? null : (_, _) => onTap!(),
           )
         : MapOptions(
             initialCameraFit: CameraFit.bounds(
@@ -117,7 +117,7 @@ class LocationMap extends StatelessWidget {
             interactionOptions: InteractionOptions(
               flags: interactive ? InteractiveFlag.all : InteractiveFlag.none,
             ),
-            onTap: onTap == null ? null : (_, __) => onTap!(),
+            onTap: onTap == null ? null : (_, _) => onTap!(),
           );
 
     return ClipRRect(
@@ -131,10 +131,7 @@ class LocationMap extends StatelessWidget {
         child: FlutterMap(
           options: options,
           children: [
-            TileLayer(
-              urlTemplate: urlTemplate,
-              userAgentPackageName: 'com.example.connect_local',
-            ),
+            const MapTileLayer(),
             MarkerLayer(
               markers: [
                 if (userLatitude != null && userLongitude != null)
@@ -144,7 +141,7 @@ class LocationMap extends StatelessWidget {
                     height: 22,
                     child: Container(
                       decoration: BoxDecoration(
-                        color: const Color(0xFF2563EB),
+                        color: kCustomerDotBlue,
                         shape: BoxShape.circle,
                         border: Border.all(color: Colors.white, width: 3),
                         boxShadow: const [
@@ -171,10 +168,7 @@ class LocationMap extends StatelessWidget {
                   ),
               ],
             ),
-            const RichAttributionWidget(
-              alignment: AttributionAlignment.bottomRight,
-              attributions: [TextSourceAttribution('© OpenStreetMap contributors')],
-            ),
+            const MapAttribution(),
           ],
         ),
       ),

@@ -85,6 +85,19 @@ describe('Auth service', () => {
       .rejects.toMatchObject({ statusCode: 400 });
   });
 
+  test("Supabase's password policy and email limit get plain messages", async () => {
+    supabase.auth.signUp.mockResolvedValue({
+      data: {},
+      error: { code: 'weak_password', message: 'Password should contain at least one character of each: abc, ABC, 012, !@#$%^&*()' }
+    });
+    await expect(authService.registerUser('p@example.test', 'Longpass11', { fullName: 'Pat Doe', role: 'customer' }))
+      .rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('add a symbol') });
+
+    supabase.auth.signUp.mockResolvedValue({ data: {}, error: { code: 'over_email_send_rate_limit', status: 429 } });
+    await expect(authService.registerUser('p@example.test', 'Longpass11!', { fullName: 'Pat Doe', role: 'customer' }))
+      .rejects.toMatchObject({ statusCode: 429, message: expect.stringContaining('confirmation emails') });
+  });
+
   test('sign-up never accepts the admin role', async () => {
     await expect(authService.registerUser('p@example.test', 'StrongPassword123!', { fullName: 'Pat Doe', role: 'admin' }))
       .rejects.toMatchObject({ statusCode: 400 });

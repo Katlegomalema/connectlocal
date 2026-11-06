@@ -5,7 +5,11 @@
 
 import * as bookingRepository from '../repositories/bookingRepository.js';
 import * as paymentService from './paymentService.js';
+import * as payoutService from './payoutService.js';
+import { notifyBookingEvent } from './bookingNotifier.js';
 import logger from '../utils/logger.js';
+import { toLatLng } from '../utils/geo.js';
+import { BOOKING_GAP_MINUTES, fitsWorkingHours, hoursFromRows } from '../utils/schedule.js';
 import {
   ARRIVAL_PIN_MAX_ATTEMPTS, BOOKING_FEE_RATE, MAX_BOOKING_QUANTITY, bookingFeeFor, roundMoney
 } from '../config/business.js';
@@ -26,7 +30,7 @@ const TERMINAL_STATUSES = ['completed', 'cancelled', 'rejected'];
 const parseStartTime = (value) => {
   const date = new Date(value);
   if (!value || Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) {
-    throw new ValidationError('scheduledStart must be a valid future date');
+    throw new ValidationError('That date and time is in the past. Please choose a later time.');
   }
 
   const maxAdvanceDays = Number(process.env.MAX_BOOKING_ADVANCE_DAYS || 365);
@@ -56,11 +60,21 @@ const assertBookingParty = async (actor, booking) => {
   throw new AuthorizationError('You are not a party to this booking');
 };
 
-/** Never send the PIN hash to any client. */
-export const publicBooking = (booking) => {
+const PHONE_VISIBLE_STATUSES = ['accepted', 'in_progress', 'completed'];
+
+/**
+ * What a client may see of a booking: never the PIN hash; the location as {latitude, longitude}; and the
+ * customer's phone number only for the customer themselves, or for the provider once the booking is accepted.
+ */
+export const publicBooking = (booking, viewer = null) => {
   if (!booking) return booking;
   const copy = { ...booking };
   delete copy.arrival_pin_hash;
+  if ('service_location' in copy) copy.service_location = toLatLng(copy.service_location);
+  if (copy.customer && viewer && viewer.id !== copy.customer_id && viewer.role !== 'admin'
+      && !PHONE_VISIBLE_STATUSES.includes(copy.status)) {
+    copy.customer = { ...copy.customer, phone_number: null };
+  }
   return copy;
 };
 
@@ -149,21 +163,43 @@ export const createBooking = async (actor, bookingData) => {
     throw new ConflictError('Provider is not approved to receive bookings');
   }
 
+  // Visit the business or house call: only what the provider offers.
+  const atBusiness = bookingData.atBusiness === true;
+  if (atBusiness && !provider.offers_visit) throw new ValidationError('This provider does not take visits at the business');
+  if (!atBusiness && provider.offers_house_call === false) throw new ValidationError('This provider does not do house calls');
+  if (!atBusiness && !bookingData.address?.trim()) throw new ValidationError('Enter the address where the provider should come');
+
   const price = await priceBooking(service, bookingData);
   const totalPrice = roundMoney(price.unitPrice * price.quantity);
-  if (!Number.isFinite(price.durationMinutes) || price.durationMinutes <= 0
-      || !Number.isFinite(totalPrice) || totalPrice <= 0) {
+  // How long the booking holds the provider's time: the hours booked (per-hour services), else one slot.
+  const blockedMinutes = price.pricingType === 'hourly' ? price.durationMinutes : (provider.slot_minutes || 60);
+  if (!Number.isFinite(blockedMinutes) || blockedMinutes <= 0 || !Number.isFinite(totalPrice) || totalPrice <= 0) {
     throw new ValidationError('Service has invalid duration or price');
   }
 
   const scheduledStart = parseStartTime(bookingData.scheduledStart);
-  const scheduledEnd = new Date(scheduledStart.getTime() + price.durationMinutes * 60000);
+  // Sent twice (slow network, double tap, app reopened)? Return the first request, never a second booking fee.
+  const duplicate = await bookingRepository.findPendingDuplicate({
+    customerId: actor.id,
+    providerId: service.provider_id,
+    serviceId: service.id,
+    scheduledStart: scheduledStart.toISOString()
+  });
+  if (duplicate) return { ...publicBooking(duplicate, actor), reused: true };
+
+  const scheduledEnd = new Date(scheduledStart.getTime() + blockedMinutes * 60000);
+  const workingHours = hoursFromRows(await bookingRepository.getProviderAvailability(provider.id));
+  if (!fitsWorkingHours(workingHours, scheduledStart, blockedMinutes)) {
+    throw new ConflictError('That time is outside the provider\'s working hours. Please choose another slot.');
+  }
+  // 30 minutes stay free after every booking (before and after this one).
+  const gapMs = BOOKING_GAP_MINUTES * 60000;
   const hasConflict = await bookingRepository.hasBookingConflict(
     service.provider_id,
-    scheduledStart.toISOString(),
-    scheduledEnd.toISOString()
+    new Date(scheduledStart.getTime() - gapMs).toISOString(),
+    new Date(scheduledEnd.getTime() + gapMs).toISOString()
   );
-  if (hasConflict) throw new ConflictError('The provider time slot is unavailable');
+  if (hasConflict) throw new ConflictError('That time slot is no longer available. Please choose another.');
 
   const booking = await bookingRepository.createBooking({
     customer_id: actor.id,
@@ -173,7 +209,8 @@ export const createBooking = async (actor, bookingData) => {
     scheduled_end: scheduledEnd.toISOString(),
     status: 'pending',
     service_price_at_booking: roundMoney(price.unitPrice),
-    duration_minutes_at_booking: price.durationMinutes,
+    duration_minutes_at_booking: blockedMinutes,
+    at_business: atBusiness,
     pricing_type_at_booking: price.pricingType,
     package_id: price.packageId || null,
     package_name_at_booking: price.packageName || null,
@@ -182,15 +219,23 @@ export const createBooking = async (actor, bookingData) => {
     booking_fee_rate: BOOKING_FEE_RATE,
     booking_fee_amount: bookingFeeFor(totalPrice),
     booking_fee_status: 'pending',
+    status_changed_by: actor.id, // -> booking_status_history (trigger)
+    // A business visit happens at the business address; a house call at the customer's.
+    service_address: atBusiness
+      ? [provider.street_address, provider.suburb, provider.city].filter((p) => p?.trim()).join(', ') || null
+      : bookingData.address.trim(),
+    service_location: !atBusiness && Number.isFinite(bookingData.latitude) && Number.isFinite(bookingData.longitude)
+      ? `SRID=4326;POINT(${bookingData.longitude} ${bookingData.latitude})`
+      : null,
     notes: bookingData.notes || null
   });
-  return publicBooking(booking);
+  return publicBooking(booking, actor);
 };
 
 export const getBooking = async (actor, bookingId) => {
   const booking = await bookingRepository.getBookingById(bookingId);
   await assertBookingParty(actor, booking);
-  return publicBooking(booking);
+  return publicBooking(booking, actor);
 };
 
 export const listBookings = async (actor, { status, page: pageValue, limit: limitValue } = {}) => {
@@ -207,7 +252,7 @@ export const listBookings = async (actor, { status, page: pageValue, limit: limi
     filters.providerId = provider.id;
   }
   const result = await bookingRepository.listBookings(filters);
-  return { ...result, bookings: result.bookings.map(publicBooking) };
+  return { ...result, bookings: result.bookings.map((booking) => publicBooking(booking, actor)) };
 };
 
 export const acceptBooking = async (actor, bookingId) => {
@@ -216,15 +261,31 @@ export const acceptBooking = async (actor, bookingId) => {
   if (booking.booking_fee_status !== 'paid') {
     throw new ConflictError('The customer has not paid the booking fee yet');
   }
+  // The time may have been taken meanwhile (e.g. this request waited unpaid longer than its hold).
+  const gapMs = BOOKING_GAP_MINUTES * 60000;
+  if (booking.scheduled_start && booking.scheduled_end && await bookingRepository.hasFirmConflict(
+    booking.provider_id,
+    new Date(new Date(booking.scheduled_start).getTime() - gapMs).toISOString(),
+    new Date(new Date(booking.scheduled_end).getTime() + gapMs).toISOString(),
+    booking.id
+  )) {
+    throw new ConflictError('You already have an accepted booking at this time. Decline this request instead.');
+  }
+  // CLAUDE.md: providers need bank details before accepting bookings (so the payout has somewhere to go).
+  if (!(await payoutService.hasPayoutDetails(booking.provider_id))) {
+    throw new ConflictError('Add your bank details (Payout details) before accepting bookings');
+  }
 
   // The PIN is derived from the booking id; only its hash is stored. The customer sees it via /arrival-pin.
   const updated = await bookingRepository.updateBooking(bookingId, ['pending'], {
     status: 'accepted',
+    status_changed_by: actor.id,
     arrival_pin_hash: hashArrivalPin(booking.id, deriveArrivalPin(booking.id)),
     arrival_pin_attempts: 0,
     arrival_pin_verified_at: null
   });
-  return publicBooking(updated);
+  await notifyBookingEvent('accepted', bookingId);
+  return publicBooking(updated, actor);
 };
 
 export const declineBooking = async (actor, bookingId, reason) => {
@@ -233,12 +294,14 @@ export const declineBooking = async (actor, bookingId, reason) => {
 
   const updated = await bookingRepository.updateBooking(bookingId, ['pending'], {
     status: 'rejected',
+    status_changed_by: actor.id,
     cancelled_by: 'provider',
     cancellation_reason: reason || null
   });
   // Business rule: fee refunded when the provider declines.
   const feeRefund = await tryRefundFee(booking);
-  return { ...publicBooking(updated), feeRefund };
+  await notifyBookingEvent('declined', bookingId, { feeRefund });
+  return { ...publicBooking(updated, actor), feeRefund };
 };
 
 /**
@@ -272,13 +335,18 @@ export const rescheduleBooking = async (actor, bookingId, scheduledStartValue) =
     throw new ValidationError('Booking has an invalid scheduled duration');
   }
   const scheduledEnd = new Date(scheduledStart.getTime() + durationMs);
+  const workingHours = hoursFromRows(await bookingRepository.getProviderAvailability(booking.provider_id));
+  if (!fitsWorkingHours(workingHours, scheduledStart, durationMs / 60000)) {
+    throw new ConflictError('That time is outside the provider\'s working hours. Please choose another slot.');
+  }
+  const gapMs = BOOKING_GAP_MINUTES * 60000;
   const hasConflict = await bookingRepository.hasBookingConflict(
     booking.provider_id,
-    scheduledStart.toISOString(),
-    scheduledEnd.toISOString(),
+    new Date(scheduledStart.getTime() - gapMs).toISOString(),
+    new Date(scheduledEnd.getTime() + gapMs).toISOString(),
     bookingId
   );
-  if (hasConflict) throw new ConflictError('The provider time slot is unavailable');
+  if (hasConflict) throw new ConflictError('That time slot is no longer available. Please choose another.');
 
   // Back to pending: the provider must accept the new time (the paid fee stays paid; a new PIN hash is set
   // on acceptance).
@@ -286,10 +354,11 @@ export const rescheduleBooking = async (actor, bookingId, scheduledStartValue) =
     scheduled_start: scheduledStart.toISOString(),
     scheduled_end: scheduledEnd.toISOString(),
     status: 'pending',
+    status_changed_by: actor.id,
     arrival_pin_hash: null,
     arrival_pin_attempts: 0
   });
-  return publicBooking(updated);
+  return publicBooking(updated, actor);
 };
 
 export const cancelBooking = async (actor, bookingId, reason) => {
@@ -312,6 +381,7 @@ export const cancelBooking = async (actor, bookingId, reason) => {
 
   const updated = await bookingRepository.updateBooking(bookingId, ['pending', 'accepted'], {
     status: 'cancelled',
+    status_changed_by: actor.id,
     cancelled_by: actor.role,
     cancellation_reason: reason || null
   });
@@ -319,7 +389,8 @@ export const cancelBooking = async (actor, bookingId, reason) => {
   // (the customer did nothing wrong). A customer cancelling after acceptance keeps the fee as the deposit.
   const refundable = booking.status === 'pending' || actor.role === 'provider';
   const feeRefund = refundable ? await tryRefundFee(booking) : 'kept';
-  return { ...publicBooking(updated), feeRefund };
+  await notifyBookingEvent('cancelled', bookingId, { feeRefund, by: actor.role });
+  return { ...publicBooking(updated, actor), feeRefund };
 };
 
 /**
@@ -336,20 +407,28 @@ export const startBooking = async (actor, bookingId, pin) => {
   }
   if (!booking.arrival_pin_hash) throw new ConflictError('This booking has no arrival PIN yet');
 
-  // The attempt counter is part of the update condition, so two parallel guesses cannot both count as one.
-  if (!hashesMatch(booking.arrival_pin_hash, hashArrivalPin(booking.id, pin))) {
+  // Use up a try BEFORE comparing. The count we read is part of the update condition, so of many guesses sent
+  // at the same moment only one gets this try; the others are refused (no burst of free guesses).
+  try {
     await bookingRepository.updateBooking(bookingId, ['accepted'], {
       arrival_pin_attempts: attempts + 1
     }, { arrival_pin_attempts: attempts });
+  } catch (error) {
+    if (error instanceof ConflictError) throw new ConflictError('Another PIN check is running. Try again in a moment.');
+    throw error;
+  }
+  if (!hashesMatch(booking.arrival_pin_hash, hashArrivalPin(booking.id, pin))) {
     const left = ARRIVAL_PIN_MAX_ATTEMPTS - attempts - 1;
     throw new ValidationError(left > 0 ? `Wrong PIN. ${left} tries left.` : 'Wrong PIN. No tries left.');
   }
 
   const updated = await bookingRepository.updateBooking(bookingId, ['accepted'], {
     status: 'in_progress',
+    status_changed_by: actor.id,
     arrival_pin_verified_at: new Date().toISOString()
-  }, { arrival_pin_attempts: attempts });
-  return publicBooking(updated);
+  }, { arrival_pin_attempts: attempts + 1 });
+  await notifyBookingEvent('started', bookingId);
+  return publicBooking(updated, actor);
 };
 
 export const completeBooking = async (actor, bookingId) => {
@@ -357,8 +436,25 @@ export const completeBooking = async (actor, bookingId) => {
   if (booking.status !== 'in_progress') {
     throw new ConflictError('Only a job in progress (PIN entered on arrival) can be completed');
   }
-  const updated = await bookingRepository.updateBooking(bookingId, ['in_progress'], { status: 'completed' });
-  return publicBooking(updated);
+  const updated = await bookingRepository.updateBooking(bookingId, ['in_progress'], { status: 'completed', status_changed_by: actor.id });
+  await notifyBookingEvent('completed', bookingId);
+  return publicBooking(updated, actor);
+};
+
+/**
+ * Customer chooses to pay the balance in cash (saved, so it survives app restarts). The provider then
+ * confirms receiving it with confirmCashBalance.
+ */
+export const chooseCashBalance = async (actor, bookingId) => {
+  requireRole(actor, ['customer']);
+  const booking = await bookingRepository.getBookingById(bookingId);
+  if (booking.customer_id !== actor.id) throw new AuthorizationError('You do not own this booking');
+  if (booking.status !== 'completed') throw new ConflictError('The balance is paid after the job is completed');
+  if (booking.balance_status === 'paid') throw new ConflictError('The balance is already paid');
+  const updated = await bookingRepository.updateBooking(bookingId, ['completed'], {
+    balance_payment_method: 'cash'
+  }, { balance_status: booking.balance_status });
+  return publicBooking(updated, actor);
 };
 
 /**
@@ -377,5 +473,6 @@ export default {
   startBooking,
   completeBooking,
   getArrivalPin,
+  chooseCashBalance,
   confirmCashBalance
 };

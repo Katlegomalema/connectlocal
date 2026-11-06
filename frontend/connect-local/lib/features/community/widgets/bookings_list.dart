@@ -19,7 +19,7 @@ class BookingsList extends StatelessWidget {
     return ListView.separated(
       padding: const EdgeInsets.all(16),
       itemCount: bookings.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
       itemBuilder: (context, index) {
         final booking = bookings[index];
         final status = booking.status.name[0].toUpperCase() + booking.status.name.substring(1);

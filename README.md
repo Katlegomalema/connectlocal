@@ -21,20 +21,22 @@ This repository contains the full software engineering documentation set (requir
 ## 2. Features
 
 ### Customer Features
-- Registration and login (Email, Phone, Google OAuth)
-- Email and phone verification
+- Sign-up as "I need a service" (customer) or "I offer a service" (provider); email login
+- Email and phone verification (6-digit code, no paid SMS) before booking
 - Nearby provider search and map markers using client-rendered Flutter maps and PostGIS
 - Provider profile and service browsing
-- Booking creation, rescheduling, and cancellation
+- Booking a time slot (visit the business or house call), rescheduling and cancellation
+- 15% booking fee by card (counts toward the price), arrival PIN, balance by card or cash
 - In-app real-time messaging with providers
 - Ratings and reviews
 - Push and in-app notifications
 - Secure payments via PayFast
 
 ### Provider Features
-- Business profile registration and identity verification
-- Service catalogue management (pricing, categories, descriptions)
-- Availability and calendar management
+- Business application (registration number + documents) approved by the admin
+- Bank details (stored encrypted) and automatic payouts (10% ConnectLocal commission)
+- Services priced per hour, fixed, or as packages
+- Working hours and slot length (30 min to 8 hours)
 - Booking acceptance/rejection workflow
 - Customer messaging
 - Payment receipt and payout tracking
@@ -107,111 +109,97 @@ See [`docs/architecture/System-Architecture.md`](docs/architecture/System-Archit
 | Authentication | Supabase Auth | Built-in email/phone/OAuth flows with JWT issuance, reducing custom auth surface area |
 | Maps & Geolocation | Flutter map renderer + PostGIS | Map tiles are rendered client-side; provider coordinates and radius search stay in the API/database |
 | Payments | PayFast | Leading South African payment gateway supporting card, EFT, and instant EFT |
-| Hosting | Supabase (DB/Auth/Storage) + Render (API hosting) | Managed infrastructure reduces DevOps overhead for a small team |
+| Hosting | Supabase (DB/Auth/Storage), Netlify (web builds), API in Codespaces for the demo | Managed infrastructure reduces DevOps overhead for a small team |
 | CI/CD | GitHub Actions | Native integration with repository, free tier sufficient for project scale |
 
 ## 5. Folder Structure
 
 ```
 connectlocal/
-├── docs/                      # All project documentation
-│   ├── architecture/
-│   ├── requirements/
-│   ├── api-specs/
-│   ├── meeting-notes/
-│   ├── sprint-plans/
-│   ├── project-management/
-│   ├── testing/
-│   └── deployment/
-├── frontend/                  # Flutter application
-├── backend/                   # Node.js/Express API
-├── database/                  # Schema, migrations, seed scripts
-├── diagrams/                  # Mermaid/UML diagrams
-│   ├── erd/
-│   ├── use-cases/
-│   ├── sequence/
-│   ├── activity/
-│   └── architecture/
-├── assets/                    # Branding, wireframes, mockups
-│   ├── branding/
-│   ├── wireframes/
-│   └── mockups/
-├── .github/
-│   ├── workflows/
-│   └── ISSUE_TEMPLATE/
-├── README.md
-├── CONTRIBUTING.md
-├── LICENSE
-└── .gitignore
+├── backend/                   # Node.js/Express API (ES modules)
+│   ├── server.js              #   starts src/app.js
+│   ├── src/
+│   │   ├── routes/            #   /api/v1/{auth,users,providers,search,bookings,messages,reviews,payments,admin,notifications,uploads,geo}
+│   │   ├── services/          #   business rules (who may do what, booking flow, payments)
+│   │   ├── repositories/      #   all database access (Supabase service role)
+│   │   ├── middleware/        #   auth (token + role), validation, rate limits, errors
+│   │   ├── integrations/      #   PayFast, Storage, payouts, maps
+│   │   └── utils/             #   validators.js (same rules as the app), schedule.js (time slots)
+│   ├── tests/                 #   jest unit + integration tests
+│   └── scripts/               #   smoke-test.sh, e2e-booking-flow.mjs, db-push.mjs, codespace-port-public.sh
+├── frontend/connect-local/    # Flutter app
+│   ├── lib/main.dart          #   customer + provider app
+│   ├── lib/main_admin.dart    #   separate admin web app
+│   ├── lib/core/              #   api_client.dart, connect_local_repository.dart (every endpoint)
+│   └── test/                  #   widget + unit tests
+├── supabase/migrations/       # the database schema, applied in order with `npm run db:push`
+├── docs/                      # requirements, architecture, API specs, project management, proposals
+├── diagrams/                  # ERD, use-case, sequence, activity, architecture (Mermaid)
+├── assets/                    # branding, wireframes (wire.pdf), mockups
+├── SETUP.md                   # how to run, test and deploy (step by step)
+├── TEST_REPORT.md             # latest full check: what passed, what failed, what is still open
+└── CLAUDE.md                  # project rules and context for the AI assistant
 ```
 
 ## 6. Getting Started
 
-### Prerequisites
-- Node.js >= 18.x and npm >= 9.x
-- Flutter SDK >= 3.19.x
-- A Supabase project (PostgreSQL + Auth + Storage)
-- PostGIS enabled in the Supabase project (the backend migration enables it when permitted)
-- PayFast merchant sandbox credentials
-- Git
+Full step-by-step instructions (Codespaces, Android Studio, Netlify, PayFast sandbox, emails) are in
+**[SETUP.md](SETUP.md)**. The short version:
 
-### Installation
+### Prerequisites
+- Node.js 20 and npm
+- Flutter SDK (stable)
+- A Supabase project (PostgreSQL with PostGIS, Auth, Storage)
+- PayFast **sandbox** merchant details
+- In GitHub Codespaces (IPv4 only), database connections must use the Supabase **Session pooler**
+  (`postgres.<ref>@aws-0-<region>.pooler.supabase.com:5432`), not `db.<ref>.supabase.co`
+
+### Run it
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/connectlocal/connectlocal.git
-cd connectlocal
-
-# 2. Backend setup
+# Backend
 cd backend
 npm install
-cp .env.example .env    # populate environment variables (see below)
-npm run dev
+cp .env.example .env     # fill in the values; .env is git-ignored and must never be committed
+npm run db:push          # apply supabase/migrations (shows what it will run first)
+npm start                # http://localhost:3000, check /health/db
 
-# 3. Frontend setup
-cd ../frontend
+# Flutter app (customer + provider) and the admin web app
+cd ../frontend/connect-local
 flutter pub get
-flutter run
+flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:3000
+flutter run -d chrome -t lib/main_admin.dart --dart-define=API_BASE_URL=http://localhost:3000
 ```
 
-### Environment Variables
+Without `--dart-define=API_BASE_URL=...` the app shows a "not connected" page: all data comes from the API,
+and only the sign-in tokens are kept on the device.
 
-Backend (`backend/.env`):
+### Environment variables (backend/.env)
 
-```
-PORT=4000
-NODE_ENV=development
+All names are listed in [`backend/.env.example`](backend/.env.example). The main ones:
 
-# Supabase
-SUPABASE_URL=https://<project>.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
-SUPABASE_ANON_KEY=<anon-key>
+| Name | What it is |
+|---|---|
+| `SUPABASE_URL`, `SUPABASE_KEY` | Supabase project URL and anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | server only, bypasses RLS: never in the app, never committed |
+| `DATABASE_URL` | Session pooler connection string (used by `npm run db:push`) |
+| `PAYFAST_MERCHANT_ID`, `PAYFAST_MERCHANT_KEY`, `PAYFAST_PASSPHRASE`, `PAYFAST_MODE=sandbox` | PayFast (server only) |
+| `PUBLIC_API_URL` | public HTTPS address of the API (PayFast return/notify links) |
+| `FRONTEND_URL`, `ADMIN_URL`, `CORS_ORIGINS` | the web app addresses allowed to call the API |
+| `PAYOUT_ENCRYPTION_KEY` | encrypts provider bank account numbers |
+| `CODE_HASH_SECRET` | hashes phone codes and arrival PINs |
 
-# Database (direct connection, for migrations)
-DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database>
+The Flutter app needs only `API_BASE_URL` (a build setting, not a secret).
 
-# JWT
-JWT_SECRET=<generated-secret>
-JWT_EXPIRY=1h
-REFRESH_TOKEN_EXPIRY=30d
+### Tests
 
-# PayFast
-PAYFAST_MERCHANT_ID=<merchant-id>
-PAYFAST_MERCHANT_KEY=<merchant-key>
-PAYFAST_PASSPHRASE=<passphrase>
-PAYFAST_MODE=sandbox
-
-# Notifications
-FCM_SERVER_KEY=<firebase-cloud-messaging-key>
+```bash
+cd backend && npm run lint && npm test                   # unit + integration tests
+API=http://localhost:3000 bash scripts/smoke-test.sh     # main flow with curl against a running API
+cd ../frontend/connect-local && flutter analyze && flutter test
 ```
 
-Frontend (`frontend/.env`):
-
-```
-API_BASE_URL=https://api.connectlocal.dev
-SUPABASE_URL=https://<project>.supabase.co
-SUPABASE_ANON_KEY=<anon-key>
-```
+See [TEST_REPORT.md](TEST_REPORT.md) for the latest results.
 
 ## 7. Contribution Guide
 
@@ -224,7 +212,7 @@ ConnectLocal uses a **GitHub Flow with release branches** model:
 | Branch | Purpose |
 |---|---|
 | `main` | Production-ready, always deployable |
-| `develop` | Integration branch for the current sprint |
+| `fix/round-2`, `delevop` | Current integration branches (Nov 2026) |
 | `feature/*` | New features, branched from `develop` |
 | `bugfix/*` | Non-critical fixes, branched from `develop` |
 | `hotfix/*` | Urgent production fixes, branched from `main` |

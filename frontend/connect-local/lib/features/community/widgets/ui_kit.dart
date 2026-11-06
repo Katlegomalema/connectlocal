@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import '../../shared/busy_button.dart';
 
 import '../../shared/brand.dart';
 import '../models/models.dart';
@@ -55,7 +59,7 @@ class SectionTitle extends StatelessWidget {
           Expanded(
             child: Text(text, style: headingStyle(size: 16, color: AppColors.text)),
           ),
-          if (trailing != null) trailing!,
+          ?trailing,
         ],
       );
 }
@@ -232,7 +236,7 @@ class EmptyState extends StatelessWidget {
 /// Full-width teal button (same as the Login button).
 class PrimaryButton extends StatelessWidget {
   final String label;
-  final VoidCallback? onPressed;
+  final FutureOr<void> Function()? onPressed;
   final bool loading;
   final IconData? icon;
   const PrimaryButton(
@@ -247,8 +251,9 @@ class PrimaryButton extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox(
         width: double.infinity,
         height: 52,
-        child: ElevatedButton(
-          onPressed: loading ? null : onPressed,
+        child: BusyElevatedButton(
+          onPressed: onPressed,
+          loading: loading,
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.teal,
             foregroundColor: Colors.white,
@@ -257,13 +262,7 @@ class PrimaryButton extends StatelessWidget {
             elevation: 0,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           ),
-          child: loading
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
-                )
-              : Row(
+          child: Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     if (icon != null) ...[

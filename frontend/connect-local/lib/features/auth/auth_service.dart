@@ -1,5 +1,3 @@
-import '../community/state/app_state.dart';
-import '../shared/verification.dart';
 
 // ---------------------------------------------------------------------------
 // BACKEND HAND-OVER POINT
@@ -16,6 +14,8 @@ import '../shared/verification.dart';
 
 /// What the backend tells the app about the person who just signed in.
 class AuthResult {
+  /// The user's id on the server (public.users.id).
+  final String userId;
   final String name;
   final String email;
 
@@ -26,7 +26,7 @@ class AuthResult {
   /// in the sign-up email, or signed in with Google). TODO (backend): real value.
   final bool emailVerified;
 
-  /// Set when the account IS one of the existing providers (demo accounts).
+  /// The provider (business) id of this account, when it has one.
   final String? providerId;
 
   /// 'customer' or 'provider' (chosen at sign-up). A provider whose application is not approved yet has
@@ -37,6 +37,7 @@ class AuthResult {
   final String? verifiedPhone;
 
   const AuthResult({
+    this.userId = '',
     required this.name,
     required this.email,
     this.isProvider = false,
@@ -98,6 +99,12 @@ abstract class AuthService {
   /// "Didn't receive the email?" Never says whether the account exists.
   Future<void> resendVerificationEmail(String email);
 
+  /// "Forgot password?": emails a reset link. Never says whether the account exists.
+  Future<void> requestPasswordReset(String email);
+
+  /// Sets a new password with the token from the reset link.
+  Future<void> resetPassword({required String token, required String newPassword});
+
   /// "Continue with Google". Opens Google's account chooser, then returns the
   /// same [AuthResult] as [login]. Throw [AuthCancelledException] if the person
   /// backs out, or [AuthException] (with a readable message) for a real failure.
@@ -106,76 +113,6 @@ abstract class AuthService {
   /// signInWithIdToken for Google here, then read the person's name, email and
   /// role from the signed-in user / profile row.
   Future<AuthResult> signInWithGoogle();
-}
-
-/// DEV TOOLS ONLY (--dart-define=DEV_TOOLS=true without API_BASE_URL): accounts created inside the app
-/// and kept on this device. The real app uses ApiAuthService (features/auth/api_auth_service.dart).
-/// Admins never sign in through this app (see features/admin/admin_auth.dart).
-/// TODO (backend): replace with Supabase Auth (see FRONTEND_HANDOVER.md).
-class LocalAuthService implements AuthService {
-  final AppState app;
-  const LocalAuthService(this.app);
-
-  @override
-  Future<void> register({
-    required String name,
-    required String email,
-    required String password,
-    bool offersServices = false,
-  }) async {
-    final error = app.registerAccount(name: name, email: email, password: password);
-    if (error != null) throw AuthException(error);
-  }
-
-  @override
-  Future<void> logout() async {}
-
-  /// No server: the code is generated and checked on this device.
-  @override
-  Future<PhoneCodeResult> requestPhoneCode(String phoneE164) async =>
-      PhoneCodeResult(demoCode: OtpService.instance.send(phoneE164));
-
-  @override
-  Future<void> verifyPhoneCode(String phoneE164, String code) async {
-    final result = OtpService.instance.check(phoneE164, code);
-    switch (result) {
-      case OtpCheck.ok:
-        return;
-      case OtpCheck.wrong:
-        throw AuthException('Wrong code. ${OtpService.instance.triesLeft} tries left.');
-      case OtpCheck.expired:
-        throw const AuthException('That code has expired. Tap Resend for a new one.');
-      case OtpCheck.tooManyTries:
-        throw const AuthException('Too many wrong tries. Tap Resend for a new code.');
-      case OtpCheck.noCode:
-        throw const AuthException('Request a code first.');
-    }
-  }
-
-  @override
-  Future<void> resendVerificationEmail(String email) async {}
-
-  @override
-  Future<AuthResult> login({required String email, required String password}) async {
-    final clean = email.trim();
-    try {
-      final account = app.authenticate(clean, password);
-      return AuthResult(
-        name: account.name,
-        email: account.email,
-        emailVerified: account.emailVerified,
-      );
-    } on StateError catch (e) {
-      throw AuthException(e.message);
-    }
-  }
-
-  /// Google sign-in needs the backend (Supabase OAuth). The button is hidden
-  /// unless built with --dart-define=GOOGLE_SIGNIN=true.
-  @override
-  Future<AuthResult> signInWithGoogle() async {
-    throw const AuthException('Google sign-in is not connected yet.');
-  }
 }
 
 /// Set once at start-up (see main.dart).

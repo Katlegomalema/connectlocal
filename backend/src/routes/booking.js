@@ -9,25 +9,39 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken } from '../middleware/auth.js';
 import { validateBody, validateUuidParam } from '../middleware/validation.js';
 import * as bookingService from '../services/bookingService.js';
+import {
+  addressSchema, futureDateTimeSchema, pinSchema, textSchema
+} from '../utils/validators.js';
 
 const router = express.Router();
 const createBookingSchema = z.object({
   providerId: z.string().uuid(),
   serviceId: z.string().uuid(),
-  scheduledStart: z.string().min(1),
+  scheduledStart: futureDateTimeSchema.transform((d) => d.toISOString()),
   packageId: z.string().uuid().optional(), // for package-priced services
   hours: z.number().int().min(1).max(24)
     .optional(), // for hourly services
-  notes: z.string().max(2000).optional()
-}).strict();
-const startSchema = z.object({ pin: z.string().regex(/^\d{4}$/, 'pin must be 4 digits') }).strict();
+  // true = the customer visits the business; false (default) = house call at [address]
+  atBusiness: z.boolean().optional(),
+  address: addressSchema.optional(), // where the job happens (house call)
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+  notes: textSchema(1000, { label: 'Notes' }).optional()
+}).strict().refine((body) => (body.latitude === undefined) === (body.longitude === undefined), {
+  message: 'Send both latitude and longitude, or neither',
+  path: ['latitude']
+}).refine((body) => body.atBusiness === true || Boolean(body.address), {
+  message: 'Enter the address where the provider should come',
+  path: ['address']
+});
+const startSchema = z.object({ pin: pinSchema }).strict();
 
 router.param('id', validateUuidParam);
-const rescheduleSchema = z.object({ scheduledStart: z.string().min(1) });
-const reasonSchema = z.object({ reason: z.string().max(1000).optional() });
+const rescheduleSchema = z.object({ scheduledStart: futureDateTimeSchema.transform((d) => d.toISOString()) });
+const reasonSchema = z.object({ reason: textSchema(1000, { label: 'The reason' }).optional() });
 const respondSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('accept') }).strict(),
-  z.object({ action: z.literal('decline'), reason: z.string().max(1000).optional() }).strict()
+  z.object({ action: z.literal('decline'), reason: textSchema(1000, { label: 'The reason' }).optional() }).strict()
 ]);
 const rescheduleRequestSchema = z.object({
   scheduledStart: z.string().min(1).optional(),
@@ -156,6 +170,15 @@ router.get('/:id/arrival-pin', verifyToken, asyncHandler(async (req, res) => {
 router.post('/:id/start', verifyToken, validateBody(startSchema), asyncHandler(async (req, res) => {
   const booking = await bookingService.startBooking(req.user, req.params.id, req.validatedBody.pin);
   res.status(200).json({ success: true, message: 'Booking started', data: booking });
+}));
+
+/**
+ * POST /api/v1/bookings/:id/balance/cash-choice
+ * Customer chooses to pay the balance in cash (the provider confirms it later).
+ */
+router.post('/:id/balance/cash-choice', verifyToken, asyncHandler(async (req, res) => {
+  const booking = await bookingService.chooseCashBalance(req.user, req.params.id);
+  res.status(200).json({ success: true, message: 'Cash payment chosen', data: booking });
 }));
 
 /**

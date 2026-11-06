@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/validators.dart';
+
 import '../../shared/verification.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
@@ -29,7 +31,9 @@ class _PayoutDetailsScreenState extends State<PayoutDetailsScreen> {
     super.initState();
     final existing = AppScope.read(context).activePayoutAccount;
     _holder = TextEditingController(text: existing?.holderName ?? '');
-    _number = TextEditingController(text: existing?.accountNumber ?? '');
+    // A server-saved number is only known as "•••••1234": the provider types the full number to change it.
+    final saved = existing?.accountNumber ?? '';
+    _number = TextEditingController(text: saved.startsWith('\u2022') ? '' : saved);
     _branch = TextEditingController(text: existing?.branchCode ?? '');
     _bank = existing?.bank;
     _type = existing?.accountType;
@@ -77,19 +81,30 @@ class _PayoutDetailsScreenState extends State<PayoutDetailsScreen> {
 
   String? _required(String? v) => (v == null || v.trim().isEmpty) ? 'Required' : null;
 
-  void _save() {
-    if (!_formKey.currentState!.validate()) return;
+  bool _saving = false;
+
+  Future<void> _save() async {
+    if (_saving || !validateAndReveal(_formKey)) return;
     final app = AppScope.read(context);
     final messenger = ScaffoldMessenger.of(context);
-    app.savePayoutAccount(PayoutAccount(
+    final navigator = Navigator.of(context);
+    setState(() => _saving = true);
+    // On the server the number is stored encrypted; the app keeps only the last 4 digits.
+    final error = await app.savePayoutDetails(PayoutAccount(
       bank: _bank!,
       accountType: _type!,
       holderName: _holder.text.trim(),
       accountNumber: _number.text.replaceAll(RegExp(r'[\s-]'), ''),
       branchCode: _branch.text.trim(),
     ));
-    Navigator.pop(context, true);
-    messenger.showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('Payout details saved')));
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (error != null) {
+      messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 4), content: Text(error)));
+      return;
+    }
+    navigator.pop(true);
+    messenger.showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('Payout details saved')));
   }
 
   @override
@@ -159,13 +174,16 @@ class _PayoutDetailsScreenState extends State<PayoutDetailsScreen> {
                   validator: (v) => v == null ? 'Required' : null,
                 ),
                 _label('Account holder name'),
-                TextFormField(
+                ValidatedField(
                   controller: _holder,
                   textCapitalization: TextCapitalization.words,
                   style: const TextStyle(fontSize: 14),
                   decoration: _decoration('As it appears on your bank account'),
                   validator: (v) {
                     if (_required(v) != null) return 'Required';
+                    if (Validators.personName(v) != null && Validators.businessName(v) != null) {
+                      return 'Use the name on the bank account (letters, spaces, - and \')';
+                    }
                     if (!bankNameMatches(v!,
                         personName: app.customerName,
                         businessName: app.activeProvider.name)) {
@@ -176,7 +194,7 @@ class _PayoutDetailsScreenState extends State<PayoutDetailsScreen> {
                   },
                 ),
                 _label('Account number'),
-                TextFormField(
+                ValidatedField(
                   controller: _number,
                   keyboardType: TextInputType.number,
                   style: const TextStyle(fontSize: 14),
@@ -184,7 +202,7 @@ class _PayoutDetailsScreenState extends State<PayoutDetailsScreen> {
                   validator: (v) => _required(v) ?? checkBankAccountNumber(v!),
                 ),
                 _label('Branch code'),
-                TextFormField(
+                ValidatedField(
                   controller: _branch,
                   keyboardType: TextInputType.number,
                   style: const TextStyle(fontSize: 14),

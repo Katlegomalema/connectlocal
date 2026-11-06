@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto';
 import * as messageRepository from '../repositories/messageRepository.js';
-import { AuthorizationError, ValidationError } from '../utils/errors.js';
+import { AuthorizationError, NotFoundError, ValidationError } from '../utils/errors.js';
 
 const requireParticipant = (actor, conversation) => {
   if (actor.id !== conversation.user_a_id && actor.id !== conversation.user_b_id) {
@@ -78,8 +78,20 @@ export const sendMessage = async (actor, { conversationId, receiverId, bookingId
   }
   let conversation;
   if (conversationId && receiverId) {
+    // Never trust a conversation id from the app: an existing one must be yours (with that person); a new one
+    // is chosen by the server. (Before, anyone could post into another pair's thread by sending its id.)
     conversation = await getOrCreateConversation(actor, { otherUserId: receiverId, bookingId });
-    conversation.id = conversationId;
+    const existing = await messageRepository.getConversationById(conversationId).catch((error) => {
+      if (error instanceof NotFoundError) return null;
+      throw error;
+    });
+    if (existing) {
+      requireParticipant(actor, existing);
+      if (![existing.user_a_id, existing.user_b_id].includes(conversation.participant_id)) {
+        throw new AuthorizationError('That person is not part of this conversation');
+      }
+      conversation.id = conversationId;
+    }
   } else if (conversationId) {
     const existing = await messageRepository.getConversationById(conversationId);
     requireParticipant(actor, existing);
@@ -100,6 +112,42 @@ export const sendMessage = async (actor, { conversationId, receiverId, bookingId
     message_text: text,
     is_read: false
   });
+};
+
+/** What the app sees of a message. */
+export const publicMessage = (message, actor) => ({
+  id: message.id,
+  conversationId: message.conversation_id,
+  bookingId: message.booking_id,
+  text: message.message_text,
+  mine: message.sender_id === actor.id,
+  isRead: message.is_read,
+  sentAt: message.created_at
+});
+
+/** Only the booking's customer and the provider who owns the booked business may use its chat. */
+const assertBookingChatParty = async (actor, booking) => {
+  if (booking.customer_id === actor.id) return;
+  if (actor.role === 'provider') {
+    const provider = await messageRepository.getProviderByUserId(actor.id);
+    if (provider?.id === booking.provider_id) return;
+  }
+  throw new AuthorizationError('You are not a party to this booking');
+};
+
+/** The chat of one booking (oldest first). Opening it marks the messages you received as read. */
+export const getBookingMessages = async (actor, bookingId) => {
+  const booking = await messageRepository.getBookingById(bookingId);
+  await assertBookingChatParty(actor, booking);
+  const messages = await messageRepository.listBookingMessages(bookingId, actor.id);
+  if (messages.some((m) => m.receiver_id === actor.id && !m.is_read)) {
+    await messageRepository.markBookingMessagesRead(bookingId, actor.id);
+  }
+  return {
+    bookingId,
+    conversationId: messages[0]?.conversation_id ?? null,
+    messages: messages.map((m) => publicMessage(m, actor))
+  };
 };
 
 export const getConversation = async (actor, conversationId, pageValue, limitValue) => {
@@ -133,6 +181,8 @@ export default {
   listConversations,
   sendMessage,
   getConversation,
+  getBookingMessages,
+  publicMessage,
   markAsRead,
   deleteOwnMessage
 };

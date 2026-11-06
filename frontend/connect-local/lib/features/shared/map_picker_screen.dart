@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'map_tiles.dart';
+
 import 'geocoding.dart';
 
 const _blue = Color(0xFF1F5FA8);
@@ -61,7 +63,8 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
   void _moved(LatLng center) {
     _center = center;
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 700), () async {
+    // Only after the map stopped moving for a moment (the server allows ~1 lookup per second for everyone).
+    _debounce = Timer(const Duration(milliseconds: 900), () async {
       final label = await reverseGeocode(center.latitude, center.longitude);
       if (!mounted || _center != center) return;
       setState(() => _label = label);
@@ -85,11 +88,12 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
     if (query.isEmpty) return;
     FocusScope.of(context).unfocus();
     setState(() => _busy = true);
-    final found = await geocodeAddress(query);
+    final result = await lookupAddress(query);
     if (!mounted) return;
     setState(() => _busy = false);
+    final found = result.point;
     if (found == null) {
-      _tell('Couldn’t find that address. Try adding the suburb or city.');
+      _tell(result.problem ?? 'Couldn’t find that address. Try adding the suburb or city.');
       return;
     }
     _jumpTo(found);
@@ -97,11 +101,12 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
 
   Future<void> _useMyLocation() async {
     setState(() => _busy = true);
-    final here = await currentLocation();
+    final (:point, :problem) = await findMyLocation();
     if (!mounted) return;
     setState(() => _busy = false);
+    final here = point;
     if (here == null) {
-      _tell('Couldn’t get your location. Check that location access is allowed.');
+      _tell(problem ?? 'Couldn’t get your location.');
       return;
     }
     _jumpTo(here);
@@ -122,14 +127,8 @@ class _MapPickerScreenState extends State<MapPickerScreen> {
               onTap: (_, point) => _map.move(point, _map.camera.zoom),
             ),
             children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.connect_local',
-              ),
-              const RichAttributionWidget(
-                alignment: AttributionAlignment.bottomLeft,
-                attributions: [TextSourceAttribution('© OpenStreetMap contributors')],
-              ),
+              const MapTileLayer(),
+              const MapAttribution(alignment: AttributionAlignment.bottomLeft),
             ],
           ),
           // The pin stays in the middle; the map moves underneath it.

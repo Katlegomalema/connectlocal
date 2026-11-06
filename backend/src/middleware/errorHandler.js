@@ -28,8 +28,17 @@ const DB_ERRORS = {
   PGRST205: SCHEMA_MISMATCH // table not in schema cache
 };
 
+/** express.json() problems: the body is not valid JSON, or it is too big. */
+const BODY_ERRORS = {
+  'entity.parse.failed': [400, 'INVALID_JSON', 'The request body is not valid JSON'],
+  'entity.too.large': [413, 'PAYLOAD_TOO_LARGE', 'The request body is too large'],
+  'encoding.unsupported': [415, 'UNSUPPORTED_ENCODING', 'The request body encoding is not supported'],
+  'charset.unsupported': [415, 'UNSUPPORTED_ENCODING', 'The request body charset is not supported']
+};
+
 const statusFor = (err) => {
   if (err instanceof AppError) return err.statusCode;
+  if (BODY_ERRORS[err.type]) return BODY_ERRORS[err.type][0];
   if (typeof err.code === 'string' && DB_ERRORS[err.code]) return DB_ERRORS[err.code][0];
   return err.statusCode || 500;
 };
@@ -48,9 +57,18 @@ export const errorHandler = (err, req, res, _next) => {
     path: req.path,
     method: req.method
   };
-  // Stack traces only for real server errors; client errors (4xx) are a one-line warning.
-  if (status >= 500) logger.error({ ...logEntry, stack: err.stack });
+  // One line per error. Stack traces only with LOG_LEVEL=debug (they made the log hard to read).
+  if (status >= 500) logger.error(logEntry);
   else logger.warn(logEntry);
+  if (status >= 500) logger.debug({ stack: err.stack }, 'Stack trace');
+
+  const bodyError = BODY_ERRORS[err.type];
+  if (bodyError) {
+    const [bodyStatus, code, message] = bodyError;
+    return res.status(bodyStatus).json({
+      success: false, code, message, timestamp: new Date().toISOString()
+    });
+  }
 
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({
@@ -103,7 +121,7 @@ export const errorHandler = (err, req, res, _next) => {
   }
 
   // Generic error response
-  res.status(err.statusCode || 500).json({
+  return res.status(err.statusCode || 500).json({
     success: false,
     code: err.code || 'INTERNAL_ERROR',
     message: process.env.NODE_ENV === 'production'

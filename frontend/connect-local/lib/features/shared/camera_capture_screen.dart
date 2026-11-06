@@ -78,7 +78,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen> {
       if (mounted) {
         setState(() => _taking = false);
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(duration: const Duration(seconds: 3), content: Text('Couldn\u2019t take the picture. Try again.')));
+            .showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('Couldn\u2019t take the picture. Try again.')));
       }
     }
   }

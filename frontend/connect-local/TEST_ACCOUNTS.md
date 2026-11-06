@@ -3,17 +3,20 @@
 There are **no built-in or demo accounts**. Everyone registers in the app. The admin has no account in the
 phone app; admin signs in on the separate admin site.
 
-## Run for testing without a backend
-Phone app:  `flutter run -d chrome --web-port 5000 --dart-define=DEV_TOOLS=true`
-Admin site: `flutter run -d chrome -t lib/main_admin.dart --dart-define=DEV_ADMIN_EMAIL=you@example.com --dart-define=DEV_ADMIN_PASSWORD=pick-a-password`
+## Run for testing
+There is no offline mode any more: the app and the admin site always talk to the backend. See `SETUP.md`
+in the project root for the commands (`API_BASE_URL` is required).
 
-Phone verification works in every build: the app generates the 6-digit code and shows it on screen (turn off with `SIMULATED_SMS=false`). `DEV_TOOLS` shows the stand-ins for the email link / reset link. A normal build hides them and
-phone/email verification then needs the backend. The two apps keep separate local data until the backend
-connects them.
+Phone verification works in every build: the backend makes the 6-digit code and (outside production) the
+app shows it on screen, because no paid SMS is used.
+
+The admin signs in on the admin site with a Supabase account whose `role` is `admin` (SETUP.md, step 4).
+Passwords need 8+ characters with a capital, a small letter and a number. (Until the Supabase password policy is
+changed to match, see SETUP.md section 7, Supabase also asks for a symbol: use e.g. `Test@1234`.)
 
 ## Accounts to create (details in business-test-pack.zip)
 Customers: Naledi Khumalo, Sam Ndlovu. Providers ("I offer a service"): Lucas Doe, Thabo Mokoena, Ayanda Zulu,
-Pieter van Wyk, Nomsa Khumalo, Sipho Dlamini. Any password of 8+ characters.
+Pieter van Wyk, Nomsa Khumalo, Sipho Dlamini.
 
 ## Flow
 1. Register a provider → apply → admin approves (admin site).

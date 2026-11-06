@@ -29,7 +29,7 @@ class ProviderDashboardScreen extends StatelessWidget {
       Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
 
   void _showNotifications(BuildContext context, AppState app) {
-    final items = List<String>.from(app.notifications);
+    final items = List<AppNotification>.from(app.notifications);
     app.markNotificationsRead();
     showModalBottomSheet(
       context: context,
@@ -49,9 +49,21 @@ class ProviderDashboardScreen extends StatelessWidget {
                   : ListView.separated(
                       shrinkWrap: true,
                       itemCount: items.length,
-                      separatorBuilder: (_, __) => const Divider(height: 20),
-                      itemBuilder: (_, i) => Text(items[i],
-                          style: const TextStyle(fontSize: 14, color: AppColors.text)),
+                      separatorBuilder: (_, _) => const Divider(height: 20),
+                      itemBuilder: (_, i) => Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(items[i].title,
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: items[i].isRead ? FontWeight.w500 : FontWeight.w700,
+                                  color: AppColors.text)),
+                          if (items[i].body.isNotEmpty)
+                            Text(items[i].body, style: const TextStyle(fontSize: 14, color: AppColors.text)),
+                          Text(whenLabel(items[i].createdAt),
+                              style: const TextStyle(fontSize: 12, color: AppColors.muted)),
+                        ],
+                      ),
                     ),
             ),
           ],

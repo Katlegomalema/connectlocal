@@ -1,6 +1,8 @@
+import '../features/shared/sa_time.dart';
 import '../features/community/models/models.dart';
 import '../features/shared/photo.dart';
 import 'api_client.dart';
+import 'payment_keys.dart';
 
 /// A category from the server (the list the app shows comes from here, not from built-in code).
 class CategoryInfo {
@@ -82,7 +84,16 @@ class ConnectLocalRepository {
       distanceIsLive: json['distance_km'] != null,
       latitude: _toDouble(json['latitude']),
       longitude: _toDouble(json['longitude']),
+      address: [json['street_address'], json['suburb'], json['city']]
+          .whereType<String>()
+          .map((part) => part.trim())
+          .where((part) => part.isNotEmpty)
+          .join(', '),
+      // Booking options. Until the API sends these, every provider does house calls only.
+      offersVisit: json['offers_visit'] == true,
+      offersHouseCall: json['offers_house_call'] != false,
       verified: json['verified'] == true || json['verification_status'] == 'verified',
+      description: (json['business_description'] as String?) ?? (json['description'] as String?) ?? '',
       services: [
         for (final s in (json['services'] as List? ?? const []))
           if (s is Map<String, dynamic>) serviceFromJson(s),
@@ -104,11 +115,11 @@ class ConnectLocalRepository {
         if (p is Map && p['is_active'] != false)
           ServicePackage(
             name: (p['name'] as String?) ?? '',
-            price: (_toDouble(p['price']) ?? 0).round(),
+            price: _toDouble(p['price']) ?? 0,
             description: (p['description'] as String?) ?? '',
           ),
     ]..sort((a, b) => a.price.compareTo(b.price));
-    final basePrice = (_toDouble(json['base_price']) ?? 0).round();
+    final basePrice = _toDouble(json['base_price']) ?? 0;
     return ServiceModel(
       id: json['id'] as String,
       name: (json['service_name'] as String?) ?? '',
@@ -188,7 +199,24 @@ class ConnectLocalRepository {
     required PhotoRef registrationDoc,
     required PhotoRef idDoc,
     List<PhotoRef> photos = const [],
+    void Function(String step, int done, int total)? onProgress,
   }) async {
+    // Progress for the screen: every step is named, so a failure says exactly what did not work.
+    final newPhotos = photos.where((p) => p.isLocal).toList();
+    final total = 4 + newPhotos.length;
+    var done = 0;
+    Future<T> step<T>(String name, Future<T> Function() run) async {
+      onProgress?.call(name, done, total);
+      try {
+        final result = await run();
+        done++;
+        onProgress?.call(name, done, total);
+        return result;
+      } on ApiException catch (e) {
+        throw ApiException('$name failed: ${e.message}', statusCode: e.statusCode, code: e.code, fieldErrors: e.fieldErrors);
+      }
+    }
+
     final profile = {
       'businessName': businessName,
       'category': category,
@@ -197,23 +225,32 @@ class ConnectLocalRepository {
       'registrationNumber': registrationNumber,
       'location': {'lat': latitude, 'lng': longitude},
     };
-    final existing = await myApplication();
-    if (existing == null) {
-      await api.post('/providers', body: profile);
-    } else if (!existing.isApproved) {
-      await api.patch('/providers/me', body: profile);
+    await step('Saving your business details', () async {
+      final existing = await myApplication();
+      if (existing == null) {
+        await api.post('/providers', body: profile);
+      } else if (!existing.isApproved) {
+        await api.patch('/providers/me', body: profile);
+      }
+    });
+
+    for (final (type, file, label) in [
+      ('registration_certificate', registrationDoc, 'Uploading the registration document'),
+      ('id_document', idDoc, 'Uploading your ID document'),
+    ]) {
+      await step(label, () async {
+        final uploaded = await upload(file, document: true);
+        await api.post('/providers/me/documents', body: {'documentType': type, 'storagePath': uploaded.path});
+      });
+    }
+    for (var i = 0; i < newPhotos.length; i++) {
+      await step('Uploading photo ${i + 1} of ${newPhotos.length}', () async {
+        final uploaded = await upload(newPhotos[i], document: false);
+        await api.post('/providers/me/photos', body: {'storagePath': uploaded.path});
+      });
     }
 
-    for (final (type, file) in [('registration_certificate', registrationDoc), ('id_document', idDoc)]) {
-      final uploaded = await upload(file, document: true);
-      await api.post('/providers/me/documents', body: {'documentType': type, 'storagePath': uploaded.path});
-    }
-    for (final photo in photos.where((p) => p.isLocal)) {
-      final uploaded = await upload(photo, document: false);
-      await api.post('/providers/me/photos', body: {'storagePath': uploaded.path});
-    }
-
-    await api.post('/providers/me/application/submit');
+    await step('Sending your application for review', () => api.post('/providers/me/application/submit'));
     return (await myApplication())!;
   }
 
@@ -253,7 +290,7 @@ class ConnectLocalRepository {
     String? serviceId,
     required String name,
     required String category,
-    required int price,
+    required double price,
     required String description,
     required PricingType pricingType,
     List<ServicePackage> packages = const [],
@@ -306,7 +343,368 @@ class ConnectLocalRepository {
   Future<void> setServiceActive(String serviceId, bool active) =>
       api.patch('/providers/me/services/$serviceId', body: {'isActive': active});
 
+  // ---- bookings ------------------------------------------------------------------------------------------
+  /// Creates a booking request (status pending, 15% fee still to pay). Returns the server booking.
+  Future<Map<String, dynamic>> createBooking({
+    required String providerId,
+    required String serviceId,
+    required DateTime scheduledStart,
+    required String address,
+    bool atBusiness = false,
+    int? hours,
+    String? packageId,
+    double? latitude,
+    double? longitude,
+    String notes = '',
+  }) async {
+    final data = ApiClient.dataOf(await api.post('/bookings', body: {
+      'providerId': providerId,
+      'serviceId': serviceId,
+      'scheduledStart': sastWallToUtc(scheduledStart).toIso8601String(), // the slot is SAST, whatever the phone's zone
+      if (atBusiness) 'atBusiness': true,
+      // A business visit happens at the business; only a house call sends the customer's address and map point.
+      if (!atBusiness) 'address': address,
+      'hours': ?hours,
+      'packageId': ?packageId,
+      if (!atBusiness && latitude != null && longitude != null) 'latitude': latitude,
+      if (!atBusiness && latitude != null && longitude != null) 'longitude': longitude,
+      if (notes.trim().isNotEmpty) 'notes': notes.trim(),
+    }));
+    return data;
+  }
+
+  // ---- booking options, working hours, taken times ---------------------------------------------------
+  /// A provider's booking options, working hours and the times already taken (public).
+  Future<ProviderSchedule> providerSchedule(String providerId) async =>
+      ProviderSchedule.fromJson(ApiClient.dataOf(await api.get('/providers/$providerId/schedule', auth: false)));
+
+  /// The signed-in provider's own options and hours.
+  Future<ProviderSchedule> mySchedule() async =>
+      ProviderSchedule.fromJson((ApiClient.dataOf(await api.get('/providers/me/schedule'))['schedule'] as Map)
+          .cast<String, dynamic>());
+
+  /// Saves the signed-in provider's options and/or hours (only what is given).
+  Future<ProviderSchedule> saveMySchedule({bool? offersVisit, bool? offersHouseCall, WorkingHours? hours}) async =>
+      ProviderSchedule.fromJson((ApiClient.dataOf(await api.put('/providers/me/schedule', body: {
+        'offersVisit': ?offersVisit,
+        'offersHouseCall': ?offersHouseCall,
+        if (hours != null) 'slotMinutes': hours.slotMinutes,
+        if (hours != null)
+          'workingHours': [
+            for (final e in hours.days.entries) {'day': e.key, 'open': e.value.open, 'close': e.value.close},
+          ],
+      }))['schedule'] as Map)
+          .cast<String, dynamic>());
+
+  /// The signed-in person's bookings (customer: theirs; provider: made with their business).
+  Future<List<Map<String, dynamic>>> myBookings() async {
+    final data = ApiClient.dataOf(await api.get('/bookings?limit=100'));
+    return [
+      for (final b in (data['bookings'] as List? ?? const []))
+        if (b is Map<String, dynamic>) b,
+    ];
+  }
+
+  Future<Map<String, dynamic>> booking(String id) async => ApiClient.dataOf(await api.get('/bookings/$id'));
+
+  Future<Map<String, dynamic>> accept(String id) async => ApiClient.dataOf(await api.post('/bookings/$id/accept'));
+
+  Future<Map<String, dynamic>> decline(String id, {String? reason}) async =>
+      ApiClient.dataOf(await api.post('/bookings/$id/decline', body: {'reason': ?reason}));
+
+  Future<Map<String, dynamic>> cancel(String id, {String? reason}) async =>
+      ApiClient.dataOf(await api.post('/bookings/$id/cancel', body: {'reason': ?reason}));
+
+  /// Provider enters the customer's PIN on arrival (checked on the server, 5 tries).
+  Future<Map<String, dynamic>> startWithPin(String id, String pin) async =>
+      ApiClient.dataOf(await api.post('/bookings/$id/start', body: {'pin': pin}));
+
+  Future<Map<String, dynamic>> complete(String id) async => ApiClient.dataOf(await api.post('/bookings/$id/complete'));
+
+  /// Provider confirms the customer paid the balance in cash.
+  Future<void> confirmCash(String id) => api.post('/bookings/$id/balance/cash');
+
+  /// Customer only, once accepted: the 4-digit PIN to give the provider.
+  Future<String?> arrivalPin(String id) async {
+    try {
+      return ApiClient.dataOf(await api.get('/bookings/$id/arrival-pin'))['pin'] as String?;
+    } on ApiException catch (e) {
+      if (e.statusCode == 409 || e.statusCode == 403) return null;
+      rethrow;
+    }
+  }
+
+  Future<void> review(String bookingId, int rating, String comment) => api.post('/reviews', body: {
+        'bookingId': bookingId,
+        'rating': rating,
+        if (comment.trim().isNotEmpty) 'comment': comment.trim(),
+      });
+
+  // ---- payouts ------------------------------------------------------------------------------------------
+  /// The provider's bank details as the server shows them (only the last 4 digits), or null.
+  Future<Map<String, dynamic>?> payoutDetails() async =>
+      (ApiClient.dataOf(await api.get('/providers/me/payout-details'))['payoutDetails'] as Map?)?.cast<String, dynamic>();
+
+  /// Sends the full account number once; the server stores it encrypted and returns the masked details.
+  Future<Map<String, dynamic>> savePayoutDetails({
+    required String bankName,
+    required String accountType,
+    required String accountHolderName,
+    required String accountNumber,
+    required String branchCode,
+  }) async =>
+      (ApiClient.dataOf(await api.put('/providers/me/payout-details', body: {
+        'bankName': bankName,
+        'accountType': accountType,
+        'accountHolderName': accountHolderName,
+        'accountNumber': accountNumber,
+        'branchCode': branchCode,
+      }))['payoutDetails'] as Map)
+          .cast<String, dynamic>();
+
+  Future<List<Map<String, dynamic>>> myPayouts() async => [
+        for (final p in (ApiClient.dataOf(await api.get('/providers/me/payouts'))['payouts'] as List? ?? const []))
+          if (p is Map<String, dynamic>) p,
+      ];
+
+  /// Customer chooses to pay the balance in cash (saved on the server).
+  Future<Map<String, dynamic>> chooseCash(String bookingId) async =>
+      ApiClient.dataOf(await api.post('/bookings/$bookingId/balance/cash-choice'));
+
+  // ---- payments (PayFast) ----------------------------------------------------------------------------------
+  /// Starts a card payment. [purpose]: 'booking_fee' or 'balance'. Open [checkoutUrl] in a browser,
+  /// then poll [paymentStatus] until it is paid or failed.
+  ///
+  /// Safe to call again (slow network, "Try again", app reopened): the same Idempotency-Key is sent, and the
+  /// server returns the SAME payment, or [alreadyPaid] = true when PayFast already confirmed it.
+  Future<({String paymentId, String? checkoutUrl, double amount, bool sandbox, bool alreadyPaid})> startPayment(
+      String bookingId, String purpose) async {
+    final key = await PaymentKeys.keyFor(bookingId, purpose);
+    final data = ApiClient.dataOf(await api.post('/payments/intent',
+        body: {'bookingId': bookingId, 'purpose': purpose}, headers: {'Idempotency-Key': key}));
+    final alreadyPaid = data['alreadyPaid'] == true || data['status'] == 'paid';
+    if (alreadyPaid) await PaymentKeys.forget(bookingId, purpose);
+    return (
+      paymentId: data['paymentId'] as String,
+      checkoutUrl: data['checkoutUrl'] as String?,
+      amount: _toDouble(data['amount']) ?? 0,
+      sandbox: data['sandbox'] == true,
+      alreadyPaid: alreadyPaid,
+    );
+  }
+
+  /// pending | paid | failed | refunded (+ PayFast's reference once paid).
+  Future<({String status, String? reference})> paymentStatus(String paymentId) async {
+    final data = ApiClient.dataOf(await api.get('/payments/$paymentId'));
+    return (status: (data['payment_status'] as String?) ?? 'pending', reference: data['transaction_reference'] as String?);
+  }
+
+  /// The signed-in person's payments (fees and balances).
+  Future<List<PaymentRecord>> myPayments() async {
+    final data = ApiClient.dataOf(await api.get('/payments?limit=100'));
+    return [
+      for (final p in (data['payments'] as List? ?? const []))
+        if (p is Map<String, dynamic>)
+          paymentFromJson({
+            ...p,
+            'status': p['payment_status'],
+            'bookingId': p['booking_id'],
+            'reference': p['transaction_reference'],
+            'createdAt': p['created_at'],
+          }),
+    ];
+  }
+
+  static PaymentRecord paymentFromJson(Map<String, dynamic> p) => PaymentRecord(
+        id: p['id'] as String,
+        bookingId: p['bookingId'] as String,
+        kind: p['purpose'] == 'balance' ? PaymentKind.service : PaymentKind.bookingFee,
+        method: p['method'] == 'cash' ? PayMethod.cash : PayMethod.card,
+        amount: _toDouble(p['amount']) ?? 0,
+        createdAt: _date(p['createdAt']) ?? DateTime.now(),
+        gatewayReference: p['reference'] as String?,
+        status: switch (p['status']) {
+          'paid' => PaymentStatus.paid,
+          'failed' => PaymentStatus.failed,
+          'refunded' || 'partially_refunded' => PaymentStatus.refunded,
+          _ => PaymentStatus.pending,
+        },
+        verified: p['status'] == 'paid' || p['status'] == 'refunded',
+        serviceName: p['serviceName'] as String?,
+        customerName: p['customerName'] as String?,
+        businessName: p['businessName'] as String?,
+      );
+
+  // ---- profile -------------------------------------------------------------------------------------------
+  Future<void> updateMyName(String userId, String fullName) =>
+      api.put('/users/$userId', body: {'fullName': fullName});
+
+  /// Business name, description, address and map point.
+  Future<void> updateMyBusiness({
+    required String name,
+    required String description,
+    required String address,
+    double? latitude,
+    double? longitude,
+  }) =>
+      api.patch('/providers/me', body: {
+        if (name.trim().length >= 2) 'businessName': name.trim(),
+        'description': description.trim(),
+        'streetAddress': address.length > 150 ? address.substring(0, 150) : address,
+        if (latitude != null && longitude != null) 'location': {'lat': latitude, 'lng': longitude},
+      });
+
+  /// Adds a photo to the business (the newest photo is the one customers see first).
+  Future<String?> addBusinessPhoto(PhotoRef photo) async {
+    final uploaded = await upload(photo, document: false);
+    await api.post('/providers/me/photos', body: {'storagePath': uploaded.path});
+    return uploaded.publicUrl;
+  }
+
+  // ---- notifications -------------------------------------------------------------------------------------
+  Future<List<AppNotification>> notifications() async {
+    final data = ApiClient.dataOf(await api.get('/notifications?limit=50'));
+    return [
+      for (final n in (data['notifications'] as List? ?? const []))
+        if (n is Map<String, dynamic>)
+          AppNotification(
+            id: n['id'] as String,
+            title: (n['title'] as String?) ?? '',
+            body: (n['message'] as String?) ?? '',
+            type: (n['notification_type'] as String?) ?? 'system',
+            createdAt: _date(n['created_at']) ?? DateTime.now(),
+            bookingId: n['related_entity_type'] == 'booking' ? n['related_entity_id'] as String? : null,
+            isRead: n['is_read'] == true,
+          ),
+    ];
+  }
+
+  Future<void> markAllNotificationsRead() => api.patch('/notifications/read-all');
+
+  // ---- messages (one chat per booking) --------------------------------------------------------------------
+  /// The booking's chat, oldest first. Opening it marks what you received as read.
+  Future<List<ChatMessage>> bookingMessages(String bookingId) async {
+    final data = ApiClient.dataOf(await api.get('/messages/booking/$bookingId'));
+    return [
+      for (final m in (data['messages'] as List? ?? const []))
+        if (m is Map<String, dynamic>) _messageFromJson(m),
+    ];
+  }
+
+  Future<ChatMessage> sendMessage(String bookingId, String text) async =>
+      _messageFromJson(ApiClient.dataOf(await api.post('/messages', body: {'bookingId': bookingId, 'body': text})));
+
+  /// Latest message + unread count for each booking chat.
+  Future<List<ConversationSummary>> conversations() async {
+    final data = ApiClient.dataOf(await api.get('/messages/conversations?limit=100'));
+    return [
+      for (final c in (data['conversations'] as List? ?? const []))
+        if (c is Map && c['booking_id'] is String)
+          ConversationSummary(
+            bookingId: c['booking_id'] as String,
+            lastMessage: (c['last_message'] as String?) ?? '',
+            lastAt: _date(c['last_message_at']) ?? DateTime.now(),
+            lastMine: c['last_message_mine'] == true,
+            unread: (c['unread_count'] as num?)?.toInt() ?? 0,
+          ),
+    ];
+  }
+
+  static ChatMessage _messageFromJson(Map<String, dynamic> m) => ChatMessage(
+        id: m['id'] as String,
+        text: (m['text'] as String?) ?? '',
+        sentAt: _date(m['sentAt']) ?? DateTime.now(),
+        mine: m['mine'] == true,
+        isRead: m['isRead'] == true,
+      );
+
+  // ---- reviews -------------------------------------------------------------------------------------------
+  /// Public reviews of a provider, newest first.
+  Future<List<ReviewItem>> providerReviews(String providerId) async {
+    final data = ApiClient.dataOf(await api.get('/reviews/$providerId?limit=50', auth: false));
+    return [
+      for (final r in (data['reviews'] as List? ?? const []))
+        if (r is Map<String, dynamic>)
+          ReviewItem(
+            id: r['id'] as String,
+            rating: (r['rating'] as num?)?.toInt() ?? 0,
+            comment: (r['comment'] as String?) ?? '',
+            customerFirstName: (r['customerFirstName'] as String?) ?? 'Customer',
+            serviceName: (r['serviceName'] as String?) ?? '',
+            createdAt: _date(r['createdAt']) ?? DateTime.now(),
+            providerResponse: r['providerResponse'] as String?,
+          ),
+    ];
+  }
+
   // ---- admin ---------------------------------------------------------------------------------------------
+  Future<Map<String, dynamic>> adminAnalytics() async => ApiClient.dataOf(await api.get('/admin/analytics'));
+
+  Future<List<AdminUser>> adminUsers() async {
+    final data = ApiClient.dataOf(await api.get('/admin/users?limit=100'));
+    return [
+      for (final u in (data['users'] as List? ?? const []))
+        if (u is Map<String, dynamic>)
+          AdminUser(
+            id: u['id'] as String,
+            name: (u['fullName'] as String?) ?? '',
+            email: (u['email'] as String?) ?? '',
+            role: (u['role'] as String?) ?? 'customer',
+            status: (u['status'] as String?) ?? 'active',
+            createdAt: _date(u['createdAt']) ?? DateTime.now(),
+            businessName: (u['business'] as Map?)?['name'] as String?,
+            businessStatus: (u['business'] as Map?)?['verificationStatus'] as String?,
+          ),
+    ];
+  }
+
+  /// [status]: active | suspended.
+  Future<void> setUserStatus(String userId, String status) => api.put('/admin/users/$userId', body: {'status': status});
+
+  /// Every booking (raw server rows, the app turns them into [Booking]s).
+  Future<List<Map<String, dynamic>>> adminBookings() async => [
+        for (final b in (ApiClient.dataOf(await api.get('/admin/bookings?limit=100'))['bookings'] as List? ?? const []))
+          if (b is Map<String, dynamic>) b,
+      ];
+
+  Future<List<PaymentRecord>> adminPayments() async => [
+        for (final p in (ApiClient.dataOf(await api.get('/admin/payments?limit=100'))['payments'] as List? ?? const []))
+          if (p is Map<String, dynamic>) paymentFromJson(p),
+      ];
+
+  Future<List<Payout>> adminPayouts() async => [
+        for (final p in (ApiClient.dataOf(await api.get('/admin/payouts?limit=100'))['payouts'] as List? ?? const []))
+          if (p is Map<String, dynamic>) payoutFromJson(p),
+      ];
+
+  /// Provider's own (/providers/me/payouts) and admin (/admin/payouts) payouts share these fields.
+  static Payout payoutFromJson(Map<String, dynamic> r, {String? providerId}) {
+    final bank = r['bank'] as Map?;
+    return Payout(
+      id: r['id'] as String,
+      providerId: providerId ?? (r['providerId'] as String?) ?? '',
+      bookingId: r['bookingId'] as String,
+      serviceName: (r['serviceName'] as String?) ?? 'Service',
+      clientName: (r['customerName'] as String?) ?? '',
+      amount: _toDouble(r['payoutAmount']) ?? 0,
+      jobTotal: _toDouble(r['grossAmount']),
+      commission: _toDouble(r['commissionAmount']) ?? 0,
+      createdAt: _date(r['createdAt']) ?? DateTime.now(),
+      status: r['status'] == 'paid' ? PayoutStatus.paid : PayoutStatus.due,
+      paidAt: _date(r['paidAt']),
+      reference: r['reference'] as String?,
+      businessName: r['businessName'] as String?,
+      note: r['note'] as String?,
+      bankLabel: bank == null
+          ? null
+          : '${bank['bankName']} · ${bank['accountType']}\n${bank['accountHolderName']}\n'
+              'Account \u2022\u2022\u2022\u2022 ${bank['accountLast4']} · Branch ${bank['branchCode']}',
+    );
+  }
+
+  static DateTime? _date(Object? value) => value is String ? DateTime.tryParse(value)?.toLocal() : null;
+
+  // ---- admin: applications ---------------------------------------------------------------------------------
   /// Applications for the admin website. [status]: pending | verified | rejected.
   Future<List<ProviderApplicationRecord>> applications({String status = 'pending'}) async {
     final data = ApiClient.dataOf(await api.get('/admin/providers/pending?status=$status&limit=100'));
@@ -372,4 +770,45 @@ class ConnectLocalRepository {
         String s => double.tryParse(s),
         _ => null,
       };
+}
+
+/// What GET /providers/:id/schedule answers: how the provider can be booked and which times are taken.
+class ProviderSchedule {
+  final bool offersVisit;
+  final bool offersHouseCall;
+  final WorkingHours hours;
+
+  /// Times held by bookings (start, length in minutes). No customer details.
+  final List<({DateTime start, int minutes})> busy;
+
+  const ProviderSchedule({
+    required this.offersVisit,
+    required this.offersHouseCall,
+    required this.hours,
+    this.busy = const [],
+  });
+
+  factory ProviderSchedule.fromJson(Map<String, dynamic> json) {
+    final days = <int, DayHours>{};
+    for (final h in (json['workingHours'] as List? ?? const [])) {
+      if (h is! Map) continue;
+      final day = (h['day'] as num?)?.toInt();
+      final open = (h['open'] as num?)?.toInt();
+      final close = (h['close'] as num?)?.toInt();
+      if (day != null && open != null && close != null && close > open) days[day] = DayHours(open, close);
+    }
+    return ProviderSchedule(
+      offersVisit: json['offersVisit'] == true,
+      offersHouseCall: json['offersHouseCall'] != false,
+      hours: WorkingHours(days: days, slotMinutes: (json['slotMinutes'] as num?)?.toInt() ?? 60),
+      busy: [
+        for (final b in (json['busy'] as List? ?? const []))
+          if (b is Map && DateTime.tryParse('${b['start']}') != null && DateTime.tryParse('${b['end']}') != null)
+            (
+              start: sastWall(DateTime.parse('${b['start']}')),
+              minutes: DateTime.parse('${b['end']}').difference(DateTime.parse('${b['start']}')).inMinutes,
+            ),
+      ],
+    );
+  }
 }

@@ -1,16 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/booking_maps.dart';
+
 import 'app_colors.dart';
 import 'avatar_box.dart';
 import 'common.dart';
 
 // Screen 29 - Provider Booking Detail
 //
-// Opened from the provider's bookings list with real data and working buttons.
-// Opened without callbacks (admin "Bookings" tile) it shows sample data and the
-// buttons only show a message.
+// Opened from the provider's bookings list with the booking's data and working buttons.
 class ProviderBookingDetailScreen extends StatelessWidget {
-  // TODO (DB): load the booking and the customer's details by id
   final String status;
   final Color statusColor;
   final String customerName;
@@ -37,18 +36,22 @@ class ProviderBookingDetailScreen extends StatelessWidget {
   /// Opens directions to the customer (provider's view).
   final VoidCallback? onDirections;
 
+  /// House call: where the customer is (shown on the Customer Location Map). Null for a business visit.
+  final double? customerLatitude;
+  final double? customerLongitude;
+
   const ProviderBookingDetailScreen({
     super.key,
-    this.status = 'Pending Confirmation',
-    this.statusColor = const Color(0xFFF5C518),
-    this.customerName = 'Lucas Doe',
-    this.phone = '082 123 4567',
-    this.service = 'Pipe repair',
-    this.date = '15 June 2025',
-    this.time = '10:00 AM',
-    this.location = '123 Main St, Cape Town',
-    this.total = 'R350',
-    this.notes = 'Please bring all necessary tools.',
+    required this.status,
+    required this.statusColor,
+    required this.customerName,
+    required this.phone,
+    required this.service,
+    required this.date,
+    required this.time,
+    required this.location,
+    required this.total,
+    this.notes = '',
     this.showActions = true,
     this.onConfirm,
     this.onDecline,
@@ -56,6 +59,8 @@ class ProviderBookingDetailScreen extends StatelessWidget {
     this.completeLabel = 'Enter PIN to Verify & Start',
     this.onChat,
     this.onDirections,
+    this.customerLatitude,
+    this.customerLongitude,
   });
 
   void _message(BuildContext context, String text) {
@@ -63,11 +68,9 @@ class ProviderBookingDetailScreen extends StatelessWidget {
   }
 
   /// Runs the real action and closes this screen, or shows a sample message.
-  void _act(BuildContext context, VoidCallback? action, String sampleMessage) {
-    if (action == null) {
-      _message(context, sampleMessage);
-      return;
-    }
+  /// Runs the real action (it reports its own result), then closes this page.
+  void _act(BuildContext context, VoidCallback? action) {
+    if (action == null) return;
     action();
     Navigator.maybePop(context);
   }
@@ -136,7 +139,17 @@ class ProviderBookingDetailScreen extends StatelessWidget {
               _line('Date: $date'),
               _line('Time: $time'),
               _line('Location: $location'),
-              if (onDirections != null)
+              if (customerLatitude != null && customerLongitude != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: CustomerLocationMap(
+                    latitude: customerLatitude!,
+                    longitude: customerLongitude!,
+                    title: 'Customer location',
+                    directionsLabel: 'Get directions to the customer',
+                  ),
+                )
+              else if (onDirections != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 10),
                   child: OutlinedButton.icon(
@@ -168,8 +181,7 @@ class ProviderBookingDetailScreen extends StatelessWidget {
                       child: TealButton(
                         'Confirm',
                         height: 44,
-                        // TODO (DB): mark the booking as confirmed
-                        onPressed: () => _act(context, onConfirm, 'Booking confirmed'),
+                        onPressed: () => _act(context, onConfirm),
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -177,8 +189,7 @@ class ProviderBookingDetailScreen extends StatelessWidget {
                       child: TealButton(
                         'Decline',
                         height: 44,
-                        // TODO (DB): mark the booking as declined
-                        onPressed: () => _act(context, onDecline, 'Booking declined'),
+                        onPressed: () => _act(context, onDecline),
                       ),
                     ),
                   ],

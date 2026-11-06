@@ -9,13 +9,14 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken, requireRole } from '../middleware/auth.js';
 import { validateBody, validateUuidParam } from '../middleware/validation.js';
 import * as adminService from '../services/adminService.js';
+import { textSchema } from '../utils/validators.js';
 
 const router = express.Router();
-const rejectSchema = z.object({ reason: z.string().trim().min(3).max(1000) }).strict();
+const rejectSchema = z.object({ reason: textSchema(1000, { min: 3, label: 'The reason' }) }).strict();
 const updateUserSchema = z.object({ status: z.enum(['active', 'suspended', 'deactivated']) }).strict();
 const disputeUpdateSchema = z.object({
   status: z.enum(['under_review', 'resolved', 'rejected']).default('resolved'),
-  resolutionNotes: z.string().max(5000).optional()
+  resolutionNotes: textSchema(5000, { label: 'The notes' }).optional()
 }).strict();
 
 // Middleware: Ensure user is admin
@@ -125,6 +126,24 @@ router.get('/analytics', asyncHandler(async (req, res) => {
     success: true,
     data: analytics
   });
+}));
+
+/** GET /api/v1/admin/bookings?status=&page=&limit=  every booking, newest first */
+router.get('/bookings', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: await adminService.listBookings(req.user, req.query) });
+}));
+
+/** GET /api/v1/admin/payments?page=&limit=  every payment (fees and balances, card and cash) */
+router.get('/payments', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: await adminService.listPayments(req.user, req.query) });
+}));
+
+/** GET /api/v1/admin/payouts?page=&limit=  every payout, bank details masked */
+router.get('/payouts', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: await adminService.listPayouts(req.user, req.query) });
 }));
 
 /**

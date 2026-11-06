@@ -46,3 +46,14 @@ export const generateOtp = () => String(crypto.randomInt(0, 1000000)).padStart(6
 
 export const hashOtp = (userId, phoneNumber, code) => hmac('phone-otp', userId, phoneNumber, String(code))
   .toString('hex');
+
+// ---- PayFast checkout link (opened in a browser without the app's login) ---------------------------------
+/** Token for GET /payments/:id/checkout, valid until [expiresAtSeconds]. */
+export const checkoutToken = (paymentId, expiresAtSeconds) => hmac('checkout', paymentId, String(expiresAtSeconds))
+  .toString('hex');
+
+export const checkoutTokenValid = (paymentId, expiresAtSeconds, token) => {
+  const expires = Number(expiresAtSeconds);
+  if (!Number.isInteger(expires) || expires * 1000 < Date.now()) return false;
+  return hashesMatch(checkoutToken(paymentId, expires), typeof token === 'string' ? token : '');
+};

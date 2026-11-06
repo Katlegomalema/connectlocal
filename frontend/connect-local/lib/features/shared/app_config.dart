@@ -18,16 +18,4 @@ class AppConfig {
   /// (no SMS is sent). ON by default for the semester project. When a real SMS
   /// service is connected, build with --dart-define=SIMULATED_SMS=false.
   static const bool simulatedSms = bool.fromEnvironment('SIMULATED_SMS', defaultValue: true);
-
-  // ---- local development only (never ship a build with these on) ---------
-  /// Stand-ins for services the backend will provide (email link, SMS code,
-  /// password-reset link). OFF by default, so a normal build shows none of them.
-  /// Run with `--dart-define=DEV_TOOLS=true` to test without a backend.
-  static const bool devTools = bool.fromEnvironment('DEV_TOOLS');
-
-  /// Admin login used only while testing the admin site without a backend.
-  /// Supply BOTH with --dart-define (no credentials live in the source code).
-  /// The real admin sign-in is a Supabase user with the `admin` role.
-  static const String devAdminEmail = String.fromEnvironment('DEV_ADMIN_EMAIL');
-  static const String devAdminPassword = String.fromEnvironment('DEV_ADMIN_PASSWORD');
 }

@@ -61,7 +61,7 @@ class _CustomerBookingsScreenState extends State<CustomerBookingsScreen> {
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
                       itemCount: bookings.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 14),
+                      separatorBuilder: (_, _) => const SizedBox(height: 14),
                       itemBuilder: (context, index) {
                         final booking = bookings[index];
                         final provider = app.providerById(booking.providerId);
@@ -83,7 +83,7 @@ class _CustomerBookingsScreenState extends State<CustomerBookingsScreen> {
                                   child: FilledButton.icon(
                                     onPressed: () => CustomerBookingDetailScreen.open(context, booking),
                                     icon: const Icon(Icons.lock_outline_rounded, size: 20),
-                                    label: Text('Pay R${booking.balance}'),
+                                    label: Text('Pay ${money(booking.balance)}'),
                                   ),
                                 )
                               : (booking.status == BookingStatus.completed &&

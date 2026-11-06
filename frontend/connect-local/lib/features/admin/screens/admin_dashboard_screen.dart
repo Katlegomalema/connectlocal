@@ -16,8 +16,34 @@ import 'admin_provider_applications_screen.dart';
 import 'admin_users_screen.dart';
 
 // Screen 32 - Admin Dashboard
-class AdminDashboardScreen extends StatelessWidget {
+class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
+
+  @override
+  State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
+}
+
+class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
+  }
+
+  /// Everything the admin screens show comes from the server; Refresh (or pull down) loads it again.
+  Future<void> _reload() async {
+    final app = AppScope.read(context);
+    setState(() => _loading = true);
+    final errors = await Future.wait([app.loadAdminData(), app.loadApplications()]);
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _error = errors.whereType<String>().firstOrNull;
+    });
+  }
 
   Future<void> _confirmLogout(BuildContext context) async {
     final confirmed = await showDialog<bool>(
@@ -39,7 +65,9 @@ class AdminDashboardScreen extends StatelessWidget {
     );
     if (confirmed != true || !context.mounted) return;
     final navigator = Navigator.of(context);
+    final app = AppScope.read(context);
     await adminAuth.signOut();
+    app.signOut();
     navigator.pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const AdminLoginScreen()),
       (route) => false,
@@ -47,7 +75,9 @@ class AdminDashboardScreen extends StatelessWidget {
   }
 
   void _open(BuildContext context, Widget page) =>
-      Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+      Navigator.push(context, MaterialPageRoute(builder: (_) => page)).then((_) {
+        if (mounted) _reload();
+      });
 
   @override
   Widget build(BuildContext context) {
@@ -59,6 +89,11 @@ class AdminDashboardScreen extends StatelessWidget {
         titleSpacing: 20,
         title: const Text('Admin dashboard'),
         actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: _loading ? null : _reload,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
           TextButton.icon(
             onPressed: () => _confirmLogout(context),
             icon: const Icon(Icons.logout_rounded, size: 20),
@@ -69,22 +104,33 @@ class AdminDashboardScreen extends StatelessWidget {
         ],
       ),
       body: SafeArea(
-        child: ListView(
+        child: RefreshIndicator(
+          onRefresh: _reload,
+          child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
           children: [
+            if (_loading) const LinearProgressIndicator(),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: AppCard(
+                  child: Text('Could not load everything: $_error',
+                      style: const TextStyle(fontSize: 14, color: AppColors.red)),
+                ),
+              ),
             Row(
               children: [
                 Expanded(
                   child: StatCard(
                       label: 'Providers',
-                      value: '${app.providers.length}',
+                      value: '${app.adminStats['verifiedProviders'] ?? 0}',
                       icon: Icons.storefront_outlined),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: StatCard(
                       label: 'Bookings',
-                      value: '${app.allBookings.length}',
+                      value: '${app.adminStats['totalBookings'] ?? app.allBookings.length}',
                       icon: Icons.event_available_outlined),
                 ),
               ],
@@ -101,12 +147,12 @@ class AdminDashboardScreen extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: StatCard(
-                      label: 'Deposits',
+                      label: 'Booking fees',
                       value: money(app.payments
                           .where((p) =>
                               p.kind == PaymentKind.bookingFee &&
                               p.status == PaymentStatus.paid)
-                          .fold<int>(0, (t, p) => t + p.amount)),
+                          .fold<double>(0, (t, p) => t + p.amount)),
                       icon: Icons.payments_outlined),
                 ),
               ],
@@ -175,6 +221,7 @@ class AdminDashboardScreen extends StatelessWidget {
               const SizedBox(height: 12),
             ],
           ],
+          ),
         ),
       ),
       bottomNavigationBar: NavigationBar(
@@ -182,7 +229,7 @@ class AdminDashboardScreen extends StatelessWidget {
         backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
         indicatorColor: AppColors.avatarBg,
-        onDestinationSelected: (i) {
+        onDestinationSelected: (int i) {
           if (i == 1) _open(context, const AdminProviderApplicationsScreen());
           if (i == 2) _open(context, const AdminUsersScreen());
           if (i == 3) _open(context, const AdminBookingsScreen());

@@ -60,33 +60,39 @@ class _AdminBookingsScreenState extends State<AdminBookingsScreen> {
     if (b.status == BookingStatus.declined || b.status == BookingStatus.cancelled) {
       serviceText = 'Not charged';
     } else if (b.balancePaid) {
-      serviceText = 'R${b.balance} paid${b.serviceMethod == null ? '' : ' (${b.serviceMethod!.label})'}';
+      serviceText = '${money(b.balance)} paid${b.serviceMethod == null ? '' : ' (${b.serviceMethod!.label})'}';
       serviceColor = AppColors.green;
     } else if (service.isNotEmpty && b.serviceMethod == PayMethod.cash) {
-      serviceText = 'R${b.balance} cash \u2013 waiting for the provider to confirm';
+      serviceText = '${money(b.balance)} cash \u2013 waiting for the provider to confirm';
       serviceColor = AppColors.orange;
     } else if (b.status == BookingStatus.completed) {
-      serviceText = 'R${b.balance} DUE \u2013 job done, customer has not paid';
+      serviceText = '${money(b.balance)} DUE \u2013 job done, customer has not paid';
       serviceColor = AppColors.red;
     } else {
-      serviceText = 'R${b.balance} to be paid after the service';
+      serviceText = '${money(b.balance)} to be paid after the service';
     }
     final String payoutText;
     if (payout.isNotEmpty) {
       final po = payout.first;
       payoutText = po.status == PayoutStatus.paid
-          ? 'R${po.amount} paid (ref ${po.reference ?? '-'})'
-          : 'R${po.amount} due to provider';
+          ? '${money(po.amount)} paid (ref ${po.reference ?? '-'})'
+          : '${money(po.amount)} due to provider';
     } else if (b.balancePaid && b.serviceMethod == PayMethod.cash) {
       payoutText = 'None (provider took the cash)';
     } else {
       payoutText = '\u2013';
     }
+    final start = b.dateTime;
+    final end = start.add(Duration(minutes: b.blockedMinutes));
+    String clock(DateTime d) => clockLabel(d.hour * 60 + d.minute);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _line('Deposit',
-            'R${b.bookingFee} ${b.feeRefunded ? 'refunded' : 'paid'}'),
+        _line('Type', b.atBusiness ? 'Visit the business' : 'House call'),
+        if (!b.atBusiness) _line('Address', b.address.isEmpty ? 'Not provided' : b.address),
+        _line('Time slot', '${clock(start)} \u2013 ${clock(end)}'),
+        _line('Booking fee',
+            '${money(b.bookingFee)} ${b.feeRefunded ? 'refunded' : 'paid'}'),
         _line('Service cost', serviceText, color: serviceColor),
         _line(
             'Provider PIN',
@@ -110,7 +116,7 @@ class _AdminBookingsScreenState extends State<AdminBookingsScreen> {
         .where((b) => b.stage == BookingStage.secured || b.stage == BookingStage.inProgress)
         .length;
     final unpaid = all.where((b) => b.awaitingPayment);
-    final unpaidTotal = unpaid.fold<int>(0, (t, b) => t + b.balance);
+    final unpaidTotal = unpaid.fold<double>(0, (t, b) => t + b.balance);
     final done = all.where((b) => b.stage == BookingStage.completed).length;
     return Scaffold(
       appBar: AppBar(title: const Text('All bookings')),
@@ -149,11 +155,11 @@ class _AdminBookingsScreenState extends State<AdminBookingsScreen> {
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
                       itemCount: shown.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 12),
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
                       itemBuilder: (_, i) {
                         final b = shown[i];
                         return BookingCard(
-                          title: '${b.clientName} \u2192 ${app.providerById(b.providerId).name}',
+                          title: '${b.clientName} \u2192 ${b.businessName ?? app.providerById(b.providerId).name}',
                           service: '${b.serviceName} \u00b7 ${b.quantityLabel}',
                           dateText: '${formatDate(b.dateTime)} \u00b7 ${formatTime(b.dateTime)}',
                           priceText: money(b.price),

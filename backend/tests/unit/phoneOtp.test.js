@@ -76,10 +76,20 @@ describe('Phone OTP', () => {
 
   test('correct code verifies the phone once (single use)', async () => {
     otpRepository.getOpenCode.mockResolvedValue(openCode('123456'));
+    otpRepository.recordFailedAttempt.mockResolvedValue({ attempts: 1 }); // the try is used up first
     const result = await authService.verifyPhoneWithOtp(user, '123456');
     expect(result).toEqual({ id: 'user-1', phone: PHONE, phoneVerified: true });
     expect(otpRepository.consumeCode).toHaveBeenCalledWith('otp-1');
     expect(userRepository.updateUser).toHaveBeenCalledWith('user-1', { phone_number: PHONE, phone_verified: true });
+  });
+
+  test('guesses at the same moment: one gets the try, the others are refused', async () => {
+    otpRepository.getOpenCode.mockResolvedValue(openCode('123456', { attempts: 0 }));
+    otpRepository.recordFailedAttempt.mockResolvedValueOnce({ attempts: 1 }).mockResolvedValue(null);
+    const results = await Promise.allSettled(['111111', '222222', '333333'].map((g) => authService.verifyPhoneWithOtp(user, g)));
+    const messages = results.map((r) => r.reason?.message || '');
+    expect(messages.filter((m) => m.startsWith('Wrong code'))).toHaveLength(1);
+    expect(messages.filter((m) => m.includes('Another check'))).toHaveLength(2);
   });
 
   test('wrong code counts an attempt and does not verify', async () => {

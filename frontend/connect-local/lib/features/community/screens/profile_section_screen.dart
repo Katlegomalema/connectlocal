@@ -17,6 +17,17 @@ class ProfileSectionScreen extends StatefulWidget {
 }
 
 class _ProfileSectionScreenState extends State<ProfileSectionScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final app = AppScope.read(context);
+      if (widget.section == 'Notifications') app.refreshNotifications();
+      if (widget.section == 'Payment History') app.refreshMyPayments();
+    });
+  }
+
   bool _pushNotifications = true;
   bool _marketingMessages = false;
 
@@ -32,73 +43,89 @@ class _ProfileSectionScreenState extends State<ProfileSectionScreen> {
     final app = AppScope.of(context);
     switch (widget.section) {
       case 'Notifications':
-        final unread = app.unreadCustomerNotifications > 0;
-        if (app.customerNotifications.isEmpty) {
-          return const EmptyState(
-            icon: Icons.notifications_none_rounded,
-            title: 'You’re all caught up',
-            message: 'New activity will show up here.',
+        final items = app.notifications;
+        final anyUnread = app.unreadNotifications > 0;
+        if (items.isEmpty) {
+          return RefreshIndicator(
+            onRefresh: () => app.refreshNotifications(),
+            child: ListView(children: const [
+              SizedBox(height: 80),
+              EmptyState(
+                icon: Icons.notifications_none_rounded,
+                title: 'You\u2019re all caught up',
+                message: 'New activity will show up here.',
+              ),
+            ]),
           );
         }
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-          children: [
-            for (final item in app.customerNotifications) ...[
-              AppCard(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: unread ? AppColors.avatarBg : AppColors.inputBg,
-                        shape: BoxShape.circle,
+        return RefreshIndicator(
+          onRefresh: () => app.refreshNotifications(),
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+            children: [
+              for (final item in items) ...[
+                AppCard(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: item.isRead ? AppColors.inputBg : AppColors.avatarBg,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          item.isRead ? Icons.done_all_rounded : Icons.notifications_none_rounded,
+                          size: 20,
+                          color: item.isRead ? AppColors.muted : AppColors.teal,
+                        ),
                       ),
-                      child: Icon(
-                        unread ? Icons.notifications_none_rounded : Icons.done_all_rounded,
-                        size: 20,
-                        color: unread ? AppColors.teal : AppColors.muted,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            item,
-                            style: TextStyle(
-                              fontSize: 15,
-                              height: 1.35,
-                              color: unread ? AppColors.text : AppColors.muted,
-                              fontWeight: unread ? FontWeight.w600 : FontWeight.w400,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.title,
+                              style: TextStyle(
+                                fontSize: 15,
+                                height: 1.35,
+                                color: item.isRead ? AppColors.muted : AppColors.text,
+                                fontWeight: item.isRead ? FontWeight.w500 : FontWeight.w700,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            unread ? 'Recent activity' : 'Read',
-                            style: const TextStyle(fontSize: 13, color: AppColors.muted),
-                          ),
-                        ],
+                            if (item.body.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(item.body,
+                                  style: const TextStyle(fontSize: 14, height: 1.35, color: AppColors.text)),
+                            ],
+                            const SizedBox(height: 4),
+                            Text(whenLabel(item.createdAt),
+                                style: const TextStyle(fontSize: 13, color: AppColors.muted)),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
+                const SizedBox(height: 12),
+              ],
+              if (anyUnread) ...[
+                const SizedBox(height: 4),
+                PrimaryButton(
+                  'Mark all as read',
+                  onPressed: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    final error = await app.markNotificationsRead();
+                    if (error != null) {
+                      messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(error)));
+                    }
+                  },
+                ),
+              ],
             ],
-            if (unread) ...[
-              const SizedBox(height: 4),
-              PrimaryButton(
-                'Mark all as read',
-                onPressed: () {
-                  app.markCustomerNotificationsRead();
-                  setState(() {});
-                },
-              ),
-            ],
-          ],
+          ),
         );
       case 'Payment Methods':
         return ListView(
@@ -117,7 +144,7 @@ class _ProfileSectionScreenState extends State<ProfileSectionScreen> {
                             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
                         SizedBox(height: 2),
                         Text(
-                          'Deposits are always paid online. You enter your payment details on PayFast’s secure page; ConnectLocal never stores them.',
+                          'Booking fees are always paid online. You enter your payment details on PayFast’s secure page; ConnectLocal never stores them.',
                           style: TextStyle(fontSize: 13, height: 1.4, color: AppColors.muted),
                         ),
                       ],
@@ -163,16 +190,16 @@ class _ProfileSectionScreenState extends State<ProfileSectionScreen> {
         return ListView.separated(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
           itemCount: payments.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 12),
+          separatorBuilder: (_, _) => const SizedBox(height: 12),
           itemBuilder: (context, index) {
             final p = payments[index];
             final booking = app.bookingById(p.bookingId);
-            final statusColor = (p.status == PaymentStatus.paid ||
-                    p.status == PaymentStatus.released)
-                ? AppColors.green
-                : p.status == PaymentStatus.refunded
-                    ? AppColors.muted
-                    : AppColors.orange;
+            final statusColor = switch (p.status) {
+              PaymentStatus.paid => AppColors.green,
+              PaymentStatus.refunded => AppColors.muted,
+              PaymentStatus.failed => AppColors.red,
+              PaymentStatus.pending => AppColors.orange,
+            };
             return AppCard(
               child: Row(
                 children: [
@@ -201,7 +228,7 @@ class _ProfileSectionScreenState extends State<ProfileSectionScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '${p.kind == PaymentKind.bookingFee ? 'Deposit' : 'Service'}'
+                          '${p.kind == PaymentKind.bookingFee ? 'Booking fee' : 'Service'}'
                           '${booking == null ? '' : ' · ${booking.serviceName}'}',
                           style: const TextStyle(
                               fontSize: 15, fontWeight: FontWeight.w600, color: AppColors.text),
@@ -226,17 +253,12 @@ class _ProfileSectionScreenState extends State<ProfileSectionScreen> {
                               fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.text)),
                       const SizedBox(height: 4),
                       StatusChip(
-                        p.status == PaymentStatus.held
-                            ? 'Held until job done'
-                            : p.status == PaymentStatus.released
-                                ? 'Released to provider'
-                            : p.status == PaymentStatus.paid && p.verified
-                            ? 'Paid · Verified'
-                            : p.status == PaymentStatus.paid
-                                ? 'Paid'
-                                : p.status == PaymentStatus.refunded
-                                    ? 'Refunded'
-                                    : 'Pending',
+                        switch (p.status) {
+                          PaymentStatus.paid => p.method == PayMethod.cash ? 'Paid in cash' : 'Paid · Verified',
+                          PaymentStatus.refunded => 'Refunded',
+                          PaymentStatus.failed => 'Failed',
+                          PaymentStatus.pending => 'Pending',
+                        },
                         color: statusColor,
                       ),
                     ],

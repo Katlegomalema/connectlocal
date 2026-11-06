@@ -16,6 +16,7 @@ const repository = {
 };
 
 jest.unstable_mockModule('../../src/repositories/reviewRepository.js', () => repository);
+jest.unstable_mockModule('../../src/services/bookingNotifier.js', () => ({ notifyBookingEvent: jest.fn(async () => {}) }));
 const reviewService = await import('../../src/services/reviewService.js');
 
 describe('Review service', () => {

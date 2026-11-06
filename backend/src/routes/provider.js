@@ -9,6 +9,12 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken, requireRole, optionalToken } from '../middleware/auth.js';
 import { validateBody, validateUuidParam } from '../middleware/validation.js';
 import * as providerService from '../services/providerService.js';
+import {
+  BUSINESS_NAME, PERSON_NAME, bankAccountSchema, branchCodeSchema, businessNameSchema, lineSchema, priceSchema,
+  registrationNumberSchema, textSchema
+} from '../utils/validators.js';
+import * as payoutService from '../services/payoutService.js';
+import * as scheduleService from '../services/scheduleService.js';
 import * as searchService from '../services/searchService.js';
 
 const router = express.Router();
@@ -18,37 +24,39 @@ const locationSchema = z.object({
   lat: z.coerce.number().min(-90).max(90),
   lng: z.coerce.number().min(-180).max(180)
 }).strict();
-const registrationNumberSchema = z.string().trim()
-  .regex(/^\d{4}\/\d{6}\/\d{2}$/, 'Registration number must look like 2019/123456/07 (YYYY/NNNNNN/TT)');
+const placeSchema = (max, label) => lineSchema(max, { label });
+const postalCodeSchema = z.string().trim().regex(/^\d{4}$/, 'Postal codes have 4 digits');
+const holderNameSchema = lineSchema(150, { min: 2, label: 'The account holder' })
+  .refine((v) => PERSON_NAME.test(v) || BUSINESS_NAME.test(v), 'Use the name on the bank account (letters, spaces, - and \')');
 const providerUpdateSchema = z.object({
-  businessName: z.string().min(2).max(150).optional(),
+  businessName: businessNameSchema.optional(),
   registrationNumber: registrationNumberSchema.optional(),
-  category: z.string().min(2).max(50).optional(),
+  category: lineSchema(100, { min: 2, label: 'The category' }).optional(),
   categoryId: z.string().uuid().optional(),
-  description: z.string().max(5000).optional(),
-  streetAddress: z.string().max(150).optional(),
-  suburb: z.string().max(100).optional(),
-  city: z.string().max(100).optional(),
-  province: z.string().max(100).optional(),
-  postalCode: z.string().max(20).optional(),
+  description: textSchema(5000, { label: 'The description' }).optional(),
+  streetAddress: lineSchema(150, { min: 5, label: 'The address' }).optional(),
+  suburb: placeSchema(100, 'The suburb').optional(),
+  city: placeSchema(100, 'The city').optional(),
+  province: placeSchema(100, 'The province').optional(),
+  postalCode: postalCodeSchema.optional(),
   location: locationSchema.optional(),
   serviceAreaRadiusKm: z.coerce.number().int().min(1).max(50)
     .optional()
 }).strict();
 const serviceSchema = z.object({
-  title: z.string().min(2).max(150),
-  description: z.string().max(5000).optional(),
-  category: z.string().min(2).max(50),
-  price: z.coerce.number().min(0).max(1000000),
+  title: lineSchema(100, { min: 2, label: 'The service name' }),
+  description: textSchema(5000, { label: 'The description' }).optional(),
+  category: lineSchema(100, { min: 2, label: 'The category' }),
+  price: priceSchema,
   durationMinutes: z.coerce.number().int().min(1).max(1440),
   pricingType: z.enum(['hourly', 'fixed', 'package']).optional(),
   isActive: z.boolean().optional()
 }).strict();
 const updateServiceSchema = serviceSchema.partial();
 const packageSchema = z.object({
-  name: z.string().min(2).max(100),
-  description: z.string().max(2000).nullable().optional(),
-  price: z.coerce.number().positive().max(1000000),
+  name: lineSchema(100, { min: 2, label: 'The package name' }),
+  description: textSchema(1000, { label: 'The package description' }).nullable().optional(),
+  price: priceSchema,
   durationMinutes: z.coerce.number().int().min(1).max(1440)
     .optional(),
   sortOrder: z.number().int().optional(),
@@ -56,16 +64,16 @@ const packageSchema = z.object({
 }).strict();
 const updatePackageSchema = packageSchema.partial();
 const registerProviderSchema = z.object({
-  businessName: z.string().min(2).max(150),
+  businessName: businessNameSchema,
   registrationNumber: registrationNumberSchema,
-  category: z.string().min(2).max(50).optional(),
+  category: lineSchema(100, { min: 2, label: 'The category' }).optional(),
   categoryId: z.string().uuid().optional(),
-  description: z.string().max(5000).optional(),
-  streetAddress: z.string().max(150).optional(),
-  suburb: z.string().max(100).optional(),
-  city: z.string().max(100).optional(),
-  province: z.string().max(100).optional(),
-  postalCode: z.string().max(20).optional(),
+  description: textSchema(5000, { label: 'The description' }).optional(),
+  streetAddress: lineSchema(150, { min: 5, label: 'The address' }).optional(),
+  suburb: placeSchema(100, 'The suburb').optional(),
+  city: placeSchema(100, 'The city').optional(),
+  province: placeSchema(100, 'The province').optional(),
+  postalCode: postalCodeSchema.optional(),
   location: locationSchema.optional(),
   latitude: z.coerce.number().min(-90).max(90).optional(),
   longitude: z.coerce.number().min(-180).max(180).optional(),
@@ -84,7 +92,7 @@ const documentSchema = z.object({
 }).strict();
 const photoSchema = z.object({
   storagePath: z.string().min(10).max(300), // from POST /uploads/sign (purpose provider_photo)
-  caption: z.string().max(200).optional()
+  caption: textSchema(200, { label: 'The caption' }).optional()
 }).strict();
 
 const registerProviderHandler = asyncHandler(async (req, res) => {
@@ -233,6 +241,51 @@ router.delete('/me/services/:serviceId/photos/:imageId', verifyToken, requireRol
   res.status(200).json({ success: true, data: result });
 }));
 
+// ---- payouts: bank details (account number encrypted, only last 4 digits returned) + payout history ----
+const payoutDetailsSchema = z.object({
+  bankName: lineSchema(100, { min: 2, label: 'The bank' }),
+  accountType: z.enum(['Cheque / Current', 'Savings', 'Transmission']),
+  accountHolderName: holderNameSchema,
+  accountNumber: bankAccountSchema,
+  branchCode: branchCodeSchema
+}).strict();
+
+router.get('/me/payout-details', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: { payoutDetails: await payoutService.getPayoutDetails(req.user) } });
+}));
+
+router.put('/me/payout-details', verifyToken, requireRole('provider'), validateBody(payoutDetailsSchema), asyncHandler(async (req, res) => {
+  const payoutDetails = await payoutService.savePayoutDetails(req.user, req.validatedBody);
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, message: 'Bank details saved', data: { payoutDetails } });
+}));
+
+router.get('/me/payouts', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {
+  res.status(200).json({ success: true, data: { payouts: await payoutService.listMyPayouts(req.user) } });
+}));
+
+const scheduleSchema = z.object({
+  offersVisit: z.boolean().optional(),
+  offersHouseCall: z.boolean().optional(),
+  slotMinutes: z.number().int().optional(),
+  workingHours: z.array(z.object({
+    day: z.number().int().min(1).max(7),
+    open: z.number().int().min(0).max(1440),
+    close: z.number().int().min(0).max(1440)
+  }).strict()).max(7).optional()
+}).strict();
+
+/** GET/PUT /providers/me/schedule: visit / house call, slot length and working hours. */
+router.get('/me/schedule', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {
+  res.status(200).json({ success: true, data: { schedule: await scheduleService.getOwnSchedule(req.user) } });
+}));
+
+router.put('/me/schedule', verifyToken, requireRole('provider'), validateBody(scheduleSchema), asyncHandler(async (req, res) => {
+  const schedule = await scheduleService.saveOwnSchedule(req.user, req.validatedBody);
+  res.status(200).json({ success: true, message: 'Booking options saved', data: { schedule } });
+}));
+
 router.get('/me/availability', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {
   const provider = await providerService.getOwnProvider(req.user);
   const availability = await providerService.getAvailability(provider.id);
@@ -249,6 +302,12 @@ router.put('/me/availability', verifyToken, requireRole('provider'), asyncHandle
  * GET /api/v1/providers/:id
  * Fetch provider profile
  */
+/** GET /providers/:id/schedule (public): booking options, working hours and the times already taken. */
+router.get('/:id/schedule', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.status(200).json({ success: true, data: await scheduleService.getPublicSchedule(req.params.id) });
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const provider = await providerService.getPublicProvider(req.params.id);
   res.status(200).json({

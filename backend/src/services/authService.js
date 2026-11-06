@@ -34,7 +34,16 @@ const emailRedirectUrl = () => process.env.EMAIL_REDIRECT_URL
 const authError = (error, fallback) => {
   const code = error?.code || '';
   const status = error?.status;
-  if (code === 'weak_password') return new ValidationError(error.message || 'Password is too weak');
+  if (code === 'weak_password') {
+    // Supabase Auth has its own password policy (Dashboard -> Auth -> Providers -> Email). Keep it the same as
+    // utils/validators.js passwordSchema; if it still asks for a symbol, say that plainly.
+    return new ValidationError(/[!@#$%^&*]/.test(error.message || '')
+      ? 'Choose a stronger password: add a symbol, for example ! or #.'
+      : 'Choose a stronger password.');
+  }
+ /* if (code === 'over_email_send_rate_limit') {
+ return new RateLimitError('We cannot send more confirmation emails right now. Please try again in an hour.');
+  }*/
   if (['user_already_exists', 'email_exists'].includes(code)) return new ConflictError('This email is already registered');
   if (code === 'email_not_confirmed') {
     return new AppError('Please confirm your email address first (check your inbox).', 403, 'EMAIL_NOT_CONFIRMED');
@@ -222,9 +231,12 @@ export const verifyPhoneWithOtp = async (actor, otp) => {
     throw new ValidationError('Too many wrong codes. Request a new one.');
   }
 
+  // Use up a try BEFORE comparing (conditional on the count we read): of many guesses sent at the same moment
+  // only one gets this try, the others are refused, so parallel guessing cannot get around the 5 tries.
+  const reserved = await phoneOtpRepository.recordFailedAttempt(open.id, open.attempts);
+  if (!reserved) throw new ValidationError('Another check of this code is running. Try again in a moment.');
   if (!hashesMatch(open.code_hash, hashOtp(actor.id, open.phone_number, otp))) {
-    const updated = await phoneOtpRepository.recordFailedAttempt(open.id, open.attempts);
-    const attempts = updated?.attempts ?? open.attempts + 1;
+    const { attempts } = reserved;
     if (attempts >= PHONE_OTP_MAX_ATTEMPTS) await phoneOtpRepository.consumeCode(open.id);
     const left = PHONE_OTP_MAX_ATTEMPTS - attempts;
     throw new ValidationError(left > 0 ? `Wrong code. ${left} tries left.` : 'Wrong code. Request a new one.');

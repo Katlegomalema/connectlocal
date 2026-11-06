@@ -8,6 +8,7 @@ import * as notificationService from './notificationService.js';
 import * as storage from '../integrations/storage.js';
 import logger from '../utils/logger.js';
 import { toLatLng } from '../utils/geo.js';
+import { BUSINESS_NAME, checkRegistrationNumber } from '../utils/validators.js';
 import {
   AuthorizationError, ConflictError, NotFoundError, ValidationError
 } from '../utils/errors.js';
@@ -35,10 +36,22 @@ const notifySafely = async (userId, notification) => {
 
 const normaliseRegistrationNumber = (value) => {
   const number = typeof value === 'string' ? value.trim() : '';
-  if (!REGISTRATION_NUMBER.test(number)) {
-    throw new ValidationError('Registration number must look like 2019/123456/07 (YYYY/NNNNNN/TT)');
-  }
+  // Same rule as the app and the route schema (utils/validators.js): format, year and company type.
+  const problem = checkRegistrationNumber(number);
+  if (problem) throw new ValidationError(problem);
   return number;
+};
+
+const assertRegistrationNumberFree = async (registrationNumber, exceptProviderId = null) => {
+  if (await providerRepository.registrationNumberInUse(registrationNumber, exceptProviderId)) {
+    throw new ConflictError('A business with this registration number has already applied');
+  }
+};
+
+const assertBusinessName = (name) => {
+  if (!name || name.length < 2 || name.length > 150 || !BUSINESS_NAME.test(name)) {
+    throw new ValidationError('Please enter a valid business name (letters, digits, spaces and & . , \' ( ) - only)');
+  }
 };
 
 const isUuid = (value) => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
@@ -153,9 +166,7 @@ export const registerProvider = async (actor, input) => {
   const businessName = input.businessName?.trim();
   const radius = input.serviceAreaRadiusKm ?? input.serviceRadiusKm ?? 10;
 
-  if (!businessName || businessName.length < 2 || businessName.length > 150) {
-    throw new ValidationError('businessName must contain between 2 and 150 characters');
-  }
+  assertBusinessName(businessName);
   for (const [field, limit] of [['streetAddress', 150], ['suburb', 100], ['city', 100], ['province', 100], ['postalCode', 20]]) {
     if (input[field] != null && (typeof input[field] !== 'string' || input[field].trim().length > limit)) {
       throw new ValidationError(`${field} must be a string of at most ${limit} characters`);
@@ -170,6 +181,7 @@ export const registerProvider = async (actor, input) => {
   const categoryId = await resolveCategoryId(input.categoryId ?? input.category);
   if (!categoryId) throw new ValidationError('category or categoryId is required');
   const registrationNumber = normaliseRegistrationNumber(input.registrationNumber);
+  await assertRegistrationNumberFree(registrationNumber);
   const hasLocation = input.location || (input.latitude !== undefined && input.longitude !== undefined);
 
   return providerRepository.createProvider({
@@ -387,9 +399,7 @@ export const updateProviderProfile = async (actor, providerId, input) => {
   for (const [inputField, dbField] of Object.entries(fieldMap)) {
     if (input[inputField] === undefined) continue;
     const value = input[inputField];
-    if (inputField === 'businessName' && (typeof value !== 'string' || value.trim().length < 2 || value.length > 150)) {
-      throw new ValidationError('businessName must contain between 2 and 150 characters');
-    }
+    if (inputField === 'businessName') assertBusinessName(typeof value === 'string' ? value.trim() : '');
     if (inputField === 'description' && (typeof value !== 'string' || value.length > 5000)) {
       throw new ValidationError('description cannot exceed 5000 characters');
     }
@@ -408,6 +418,7 @@ export const updateProviderProfile = async (actor, providerId, input) => {
       throw new ConflictError('The registration number of a verified business cannot be changed');
     }
     updates.business_registration_number = normaliseRegistrationNumber(input.registrationNumber);
+    await assertRegistrationNumberFree(updates.business_registration_number, providerId);
   }
   if (!Object.keys(updates).length) throw new ValidationError('No editable provider fields were supplied');
 
@@ -516,7 +527,9 @@ export const deactivatePackage = async (actor, providerId, serviceId, packageId)
 };
 
 export const getAvailability = async (providerId) => {
-  await providerRepository.getProviderById(providerId);
+  const provider = await providerRepository.getProviderById(providerId);
+  // Public route: only approved, active businesses (same as their services).
+  if (provider.verification_status !== 'verified' || !provider.is_active) throw new NotFoundError('Provider not found');
   const [weekly, timeOff] = await Promise.all([
     providerRepository.getProviderAvailability(providerId),
     providerRepository.listProviderTimeOff(providerId)

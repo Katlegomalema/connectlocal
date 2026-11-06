@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../community/utils/format.dart';
 
 import '../../community/screens/customer_bookings_screen.dart';
 import '../models/booking_request.dart';
@@ -37,8 +38,8 @@ class BookingConfirmationScreen extends StatelessWidget {
                       fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.navy)),
               const SizedBox(height: 10),
               Text(
-                'Your deposit is paid. ${request.providerName} will review your '
-                'request. Once they accept, you’ll pay R${request.serviceTotal} for the service.',
+                'Your booking fee is paid and your time slot is held. ${request.providerName} will review your '
+                'request. After the service, you’ll pay the remaining ${money(request.serviceTotal - request.fee)}.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 14, height: 1.45, color: AppColors.textGrey),
               ),
@@ -53,9 +54,12 @@ class BookingConfirmationScreen extends StatelessWidget {
                     InfoLine('Service: ${request.serviceName}'),
                     InfoLine('Date: ${request.date}'),
                     InfoLine('Time: ${request.time}  ($hours)'),
-                    InfoLine('Address: ${request.address}'),
-                    InfoLine('Deposit paid: R${request.fee} (counts toward the price)'),
-                    InfoLine('Due after acceptance: R${request.serviceTotal}'),
+                    InfoLine(request.atBusiness ? 'Type: Visit the business' : 'Type: House call'),
+                    InfoLine(request.atBusiness
+                        ? 'Business address: ${request.address.isEmpty ? 'see the provider’s profile' : request.address}'
+                        : 'Your address: ${request.address}'),
+                    InfoLine('Booking fee paid: ${money(request.fee)} (refunded if they decline)'),
+                    InfoLine('Due after the service: ${money(request.serviceTotal - request.fee)}'),
                     const InfoLine('Status: Awaiting provider'),
                   ],
                 ),

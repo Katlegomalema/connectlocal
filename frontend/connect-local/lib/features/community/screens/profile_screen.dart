@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/validators.dart';
+
 import '../widgets/logout.dart';
 
 import '../../shared/photo_picker.dart';
@@ -27,9 +29,10 @@ class ProfileScreen extends StatelessWidget {
         initialEmail: app.customerEmail,
       ),
     );
-    if (result != null) {
-      app.updateCustomerProfile(name: result.name, email: result.email);
-    }
+    if (result == null || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final error = await app.updateCustomerProfile(name: result.name, email: result.email);
+    messenger.showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(error ?? 'Profile saved')));
   }
 
   void _openSection(BuildContext context, String title) {
@@ -157,7 +160,7 @@ class ProfileScreen extends StatelessWidget {
                   _ => 'Offer your services and earn',
                 },
                 onTap: () => app.myApplication?.status == ApplicationStatus.pending
-                    ? ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: const Duration(seconds: 3), 
+                    ? ScaffoldMessenger.of(context).showSnackBar(const SnackBar(duration: Duration(seconds: 3), 
                         content: Text('Your application is being reviewed. You will be notified.')))
                     : openBecomeProvider(context),
               ),
@@ -204,7 +207,7 @@ class _EditProfileDialogState extends State<_EditProfileDialog> {
       TextEditingController(text: widget.initialName);
   late final TextEditingController _email =
       TextEditingController(text: widget.initialEmail);
-  String? _error;
+  final _formKey = GlobalKey<FormState>();
 
   @override
   void dispose() {
@@ -214,34 +217,36 @@ class _EditProfileDialogState extends State<_EditProfileDialog> {
   }
 
   void _save() {
-    final email = _email.text.trim();
-    if (email.isNotEmpty && !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
-      setState(() => _error = 'Enter a valid email address');
-      return;
-    }
-    Navigator.pop(context, (name: _name.text, email: email));
+    if (!validateAndReveal(_formKey)) return;
+    Navigator.pop(context, (name: Validators.oneLine(_name.text), email: _email.text.trim()));
   }
 
   @override
   Widget build(BuildContext context) => AlertDialog(
         title: const Text('Edit Profile'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _name,
-              decoration: const InputDecoration(labelText: 'Full name'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _email,
-              keyboardType: TextInputType.emailAddress,
-              decoration: InputDecoration(
-                labelText: 'Email address',
-                errorText: _error,
+        content: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ValidatedField(
+                controller: _name,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(labelText: 'Full name'),
+                validator: Validators.personName,
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              // Your sign-in email cannot be changed here (it is your account's ID with Supabase Auth).
+              TextField(
+                controller: _email,
+                enabled: false,
+                decoration: const InputDecoration(
+                  labelText: 'Email address',
+                  helperText: 'Your sign-in email cannot be changed here.',
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
