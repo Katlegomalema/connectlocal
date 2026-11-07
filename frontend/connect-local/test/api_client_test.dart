@@ -99,6 +99,17 @@ void main() {
     );
     await expectLater(api.post('/auth/register', auth: false, body: {}),
         throwsA(isA<ApiException>().having((e) => e.message, 'message', contains('confirmation email'))));
+
+    final signUp = ApiClient(
+      baseUrl: 'https://example.test',
+      httpClient: MockClient((_) async => jsonResponse(502, {
+            'success': false,
+            'code': 'EMAIL_SEND_FAILED',
+            'message': 'The confirmation email could not be sent. Please try again later.'
+          })),
+    );
+    await expectLater(signUp.post('/auth/register', auth: false, body: {}),
+        throwsA(isA<ApiException>().having((e) => e.message, 'message', contains('confirmation email'))));
   });
 
   test('server errors never show raw details', () async {

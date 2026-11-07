@@ -381,8 +381,8 @@ class ApiClient {
       message = serverMessage.isNotEmpty && !serverMessage.startsWith('Too many requests')
           ? serverMessage
           : 'Too many attempts. Please wait a minute and try again.';
-    } else if (code == 'EXTERNAL_SERVICE_ERROR' && serverMessage.isNotEmpty) {
-      // The server explains which outside service failed, e.g. "We could not send the confirmation email".
+    } else if (_explainedServerCodes.contains(code) && serverMessage.isNotEmpty) {
+      // The server explains what failed outside the app, e.g. "The confirmation email could not be sent".
       message = serverMessage;
     } else if (status == 503) {
       message = 'ConnectLocal is busy or being updated. Please try again in a minute.';
@@ -393,6 +393,14 @@ class ApiClient {
     }
     return ApiException(message, statusCode: status, code: code, fieldErrors: fieldErrors);
   }
+
+  /// Server errors whose message is written for people (not raw details), so the app shows them as they are.
+  static const _explainedServerCodes = {
+    'EXTERNAL_SERVICE_ERROR',
+    'EMAIL_SEND_FAILED',
+    'SIGNUP_EMAIL_UNAVAILABLE',
+    'SIGNUP_DISABLED',
+  };
 
   /// Convenience for callers: the `data` object of an answer.
   static Map<String, dynamic> dataOf(Map<String, dynamic> json) => _data(json);
