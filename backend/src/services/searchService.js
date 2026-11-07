@@ -4,6 +4,7 @@
  */
 
 import * as providerRepository from '../repositories/providerRepository.js';
+import { publicGallery, withServiceExtras } from './providerService.js';
 import { toLatLng } from '../utils/geo.js';
 import { AuthorizationError, NotFoundError, ValidationError } from '../utils/errors.js';
 
@@ -19,16 +20,33 @@ const parsePagination = (pageValue, limitValue) => {
 const pointToLatLng = (location) => toLatLng(location) || {};
 
 /**
- * What a listing card needs: active services (with active packages), a photo and coordinates.
+ * Photos for customers: the business photos (newest first; the newest is the profile picture, `photoUrl`)
+ * and each service's photos (the app shows them as the provider's portfolio).
+ */
+const withPhotos = async (providers) => {
+  const [gallery, services] = await Promise.all([
+    providerRepository.listGallery(providers.map((provider) => provider.id)),
+    withServiceExtras(providers.flatMap((provider) => provider.services || []))
+  ]);
+  const servicesById = new Map(services.map((service) => [service.id, service]));
+  return providers.map((provider) => {
+    const photos = publicGallery(gallery.filter((photo) => photo.provider_id === provider.id));
+    return {
+      ...provider,
+      photoUrl: photos[0]?.url ?? null,
+      photos,
+      services: (provider.services || []).map((service) => servicesById.get(service.id) || service)
+    };
+  });
+};
+
+/**
+ * What a listing card needs: active services (with active packages and photos), photos and coordinates.
  * Never includes the owner's private details.
  */
 const withListingDetails = async (providers) => {
-  const ids = providers.map((provider) => provider.id);
-  const [services, gallery] = await Promise.all([
-    providerRepository.listActiveServicesForProviders(ids),
-    providerRepository.listGallery(ids)
-  ]);
-  return providers.map((provider) => {
+  const services = await providerRepository.listActiveServicesForProviders(providers.map((provider) => provider.id));
+  return withPhotos(providers.map((provider) => {
     const { location, ...rest } = provider;
     const coordinates = provider.latitude !== undefined
       ? { latitude: provider.latitude, longitude: provider.longitude }
@@ -37,12 +55,9 @@ const withListingDetails = async (providers) => {
       ...rest,
       ...coordinates,
       verified: true, // search only returns verified, active providers
-      photoUrl: gallery.find((photo) => photo.provider_id === provider.id)?.image_url ?? null,
-      services: services
-        .filter((service) => service.provider_id === provider.id)
-        .map((service) => ({ ...service, packages: (service.packages || []).filter((pkg) => pkg.is_active) }))
+      services: services.filter((service) => service.provider_id === provider.id)
     };
-  });
+  }));
 };
 
 export const searchNearby = async (latitudeValue, longitudeValue, radiusValue = 50, filters = {}) => {
@@ -95,6 +110,7 @@ export const searchNearby = async (latitudeValue, longitudeValue, radiusValue = 
       .some((service) => Number(service.base_price) <= maxPrice));
   }
 
+  providers = await withPhotos(providers);
   return {
     providers,
     count: providers.length,

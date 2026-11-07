@@ -150,12 +150,40 @@ const validateService = (input, partial = false) => {
   return service;
 };
 
+/**
+ * Business photos for customers, newest first: the newest one is the business's profile picture
+ * (the app uploads a new picture as a new photo).
+ */
+export const publicGallery = (gallery) => [...gallery]
+  .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+  .map((photo) => ({ id: photo.id, url: photo.image_url, caption: photo.caption ?? null }));
+
+/** Attach photos (and only active packages for the public) to a list of services. */
+export const withServiceExtras = async (services, { includeInactivePackages = false } = {}) => {
+  const images = await providerRepository.listServiceImages(services.map((service) => service.id));
+  return services.map((service) => ({
+    ...service,
+    packages: (service.packages || [])
+      .filter((pkg) => includeInactivePackages || pkg.is_active)
+      .sort((a, b) => a.sort_order - b.sort_order || Number(a.price) - Number(b.price)),
+    photos: images
+      .filter((image) => image.service_id === service.id)
+      .map((image) => ({ id: image.id, url: image.image_url }))
+  }));
+};
+
 export const getPublicProvider = async (providerId) => {
   const provider = await providerRepository.getProviderById(providerId);
   if (provider.verification_status !== 'verified' || !provider.is_active) throw new NotFoundError('Provider not found');
   const profile = Object.fromEntries(providerProfileFields.map((field) => [field, provider[field] ?? null]));
   profile.location = publicLocation(profile.location);
-  profile.services = await providerRepository.getProviderServices(providerId);
+  const [services, gallery] = await Promise.all([
+    providerRepository.getProviderServices(providerId),
+    providerRepository.listGallery(providerId)
+  ]);
+  profile.services = await withServiceExtras(services);
+  profile.photos = publicGallery(gallery);
+  profile.photoUrl = profile.photos[0]?.url ?? null;
   return profile;
 };
 
@@ -358,20 +386,6 @@ export const removeServicePhoto = async (actor, serviceId, imageId) => {
   const image = await providerRepository.deleteServiceImage(service.id, imageId);
   await storage.removeFiles(storage.BUCKETS.photos, [storage.photoPathFromPublicUrl(image.image_url)]);
   return { id: image.id, removed: true };
-};
-
-/** Attach photos (and only active packages for the public) to a list of services. */
-const withServiceExtras = async (services, { includeInactivePackages = false } = {}) => {
-  const images = await providerRepository.listServiceImages(services.map((service) => service.id));
-  return services.map((service) => ({
-    ...service,
-    packages: (service.packages || [])
-      .filter((pkg) => includeInactivePackages || pkg.is_active)
-      .sort((a, b) => a.sort_order - b.sort_order || Number(a.price) - Number(b.price)),
-    photos: images
-      .filter((image) => image.service_id === service.id)
-      .map((image) => ({ id: image.id, url: image.image_url }))
-  }));
 };
 
 /** The provider's own services, including inactive ones (works before approval too). */

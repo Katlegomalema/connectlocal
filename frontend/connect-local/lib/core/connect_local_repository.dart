@@ -98,6 +98,11 @@ class ConnectLocalRepository {
         for (final s in (json['services'] as List? ?? const []))
           if (s is Map<String, dynamic>) serviceFromJson(s),
       ],
+      // Business photos, newest first (the newest is also photoUrl, the profile picture).
+      gallery: [
+        for (final ph in (json['photos'] as List? ?? const []))
+          if (ph is Map && ph['url'] is String) PhotoRef(url: ph['url'] as String, name: 'photo.jpg'),
+      ],
     );
     final photo = json['photoUrl'] as String?;
     if (photo != null) provider.avatar = PhotoRef(url: photo, name: 'photo.jpg');

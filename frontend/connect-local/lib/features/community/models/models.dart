@@ -322,7 +322,11 @@ class ProviderModel {
     this.distanceIsLive = false,
     this.verified = false,
     this.description = '',
+    this.gallery = const [],
   });
+
+  /// Photos of the business (newest first), uploaded by the provider.
+  List<PhotoRef> gallery;
 
   /// The business description (the provider's own business, from the server).
   String description;
@@ -343,11 +347,18 @@ class ProviderModel {
     return null;
   }
 
-  /// Every photo from this provider's active services (their portfolio).
-  List<PhotoRef> get portfolio => [
+  /// The business photos, then every photo from this provider's active services (their portfolio).
+  List<PhotoRef> get portfolio {
+    final seen = <String>{};
+    return [
+      for (final photo in [
+        ...gallery,
         for (final service in services)
           if (service.active) ...service.photos,
-      ];
+      ])
+        if (seen.add(photo.url ?? 'local-${identityHashCode(photo)}')) photo,
+    ];
+  }
 
   List<ServiceModel> get activeServices =>
       services.where((service) => service.active).toList(growable: false);
