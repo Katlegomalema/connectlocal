@@ -28,10 +28,21 @@ else
   API="http://localhost:3000"
 fi
 
+# Maps: MapTiler when a key is set (MAPTILER_KEY=..., or the git-ignored file .maptiler-key next to pubspec.yaml),
+# otherwise Esri's street map (no key).
+if [ -z "${MAPTILER_KEY:-}" ] && [ -f .maptiler-key ]; then MAPTILER_KEY=$(tr -d '[:space:]' < .maptiler-key); fi
+MAP_DEFINE=""
+if [ -n "${MAPTILER_KEY:-}" ]; then
+  MAP_DEFINE="--dart-define=MAPTILER_KEY=$MAPTILER_KEY"
+  echo "Maps: MapTiler"
+else
+  echo "Maps: Esri World Street Map (set MAPTILER_KEY to use MapTiler)"
+fi
+
 echo "API_BASE_URL = $API"
 echo "Building $TARGET (takes 1-2 minutes)..."
 docker run --rm -v flutter-pub-cache:/root/.pub-cache -v "$PWD":/app -w /app ghcr.io/cirruslabs/flutter:stable \
-  bash -c "flutter pub get >/dev/null && flutter build web --release -t $TARGET -o $OUT --dart-define=API_BASE_URL=$API"
+  bash -c "flutter pub get >/dev/null && flutter build web --release -t $TARGET -o $OUT --dart-define=API_BASE_URL=$API $MAP_DEFINE"
 # The container writes files as root; give them back to you.
 sudo chown -R "$(id -u):$(id -g)" . 2>/dev/null || true
 

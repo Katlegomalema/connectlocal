@@ -223,9 +223,17 @@ Restart the backend. Without this, the browser blocks every API call from the Ne
 
 ## 6. Maps and address search
 
-- **Map tiles:** CARTO "Voyager" (OpenStreetMap data), free without a key, allowed for apps and web pages.
-  The attribution "© OpenStreetMap contributors © CARTO" must stay visible (it is drawn on every map).
-  Another provider: build with `--dart-define=MAP_TILE_URL=...` and `--dart-define=MAP_ATTRIBUTION=...`.
+- **Map tiles: MapTiler** (free plan, non-commercial, 100k tiles a month). The key is a public browser key,
+  limited in MapTiler (Account → API keys) to our sites: the Codespace address, `localhost`, `?` (the Android
+  app sends no Origin) and the Netlify address (add it when you have it). It is NOT in git: put it in
+  `frontend/connect-local/.maptiler-key` (git-ignored; ask Katlego for it). `tool/run_web_codespace.sh` reads that file.
+  Other builds need it too:
+  ```bash
+  # Android Studio / APK / Netlify build: add
+  --dart-define=MAPTILER_KEY=$(cat .maptiler-key)
+  ```
+  Without a key the app uses Esri's World Street Map (no key). Not usable any more: CARTO ("API KEY REQUIRED")
+  and tile.openstreetmap.org ("Access blocked"). The map credit in the corner must stay visible.
 - **Address search** goes through our backend (`GET /api/v1/geo/search?q=`, `/geo/reverse?lat=&lng=`). It calls
   Nominatim at most once per second with ConnectLocal's name, and caches answers. Optional in `backend/.env`:
   `NOMINATIM_EMAIL` (so Nominatim can contact us instead of blocking us).
@@ -234,6 +242,15 @@ Restart the backend. Without this, the browser blocks every API call from the Ne
 ## 7. Emails (confirm address, reset password)
 
 Supabase sends both emails.
+
+- **Before the demo: set up your own email sender.** Supabase's built-in sender only allows a few emails per
+  hour, so the 3rd sign-up in an hour gets "We cannot send more confirmation emails right now". Supabase →
+  **Authentication → Emails → SMTP Settings**: turn on custom SMTP (e.g. SendGrid: host `smtp.sendgrid.net`,
+  port 587, user `apikey`, password = a SendGrid API key, sender = a verified address). Then raise
+  **Authentication → Rate Limits → emails per hour**.
+- **Password rule:** Supabase → **Authentication → Providers → Email → Password requirements** must be
+  "Lowercase, uppercase letters and digits" (8 characters minimum), the same rule as the app and API. If it still
+  asks for symbols, sign-up with e.g. `Longpass11` fails with "add a symbol".
 
 - **Confirm email:** the link opens `EMAIL_REDIRECT_URL` (or the first `FRONTEND_URL`). Set it to the app site.
 - **Reset password:**
@@ -257,6 +274,7 @@ npm run lint
 npm test
 PORT=3005 node server.js &                               # a second server just for the next line
 node --env-file=.env scripts/e2e-booking-flow.mjs 3005   # whole flow against the real database; cleans up after itself
+API=http://localhost:3005 bash scripts/smoke-test.sh     # the same main flow with plain curl, PASS/FAIL per step
 kill %1
 
 # Flutter
@@ -266,7 +284,10 @@ flutterd test
 ```
 
 The end-to-end script creates temporary `cl-curltest-…@connectlocal.test` users and deletes them at the
-end. It should finish with `ALL PASSED` and `temporary test users left: 0`.
+end. It should finish with `ALL PASSED` and `temporary test users left: 0`. The smoke test creates
+`cl-smoke-…@mailinator.com` users (sign-up checks that the domain receives mail; change it with
+`SMOKE_EMAIL_DOMAIN`), deletes them at the end and exits 0 only when every step passed. `PAY=real` lets you pay
+the booking fee yourself in the PayFast sandbox instead of simulating the ITN. Results: `TEST_REPORT.md`.
 
 ---
 

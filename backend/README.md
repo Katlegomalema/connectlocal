@@ -1,49 +1,48 @@
-# ConnectLocal — Backend (Node.js / Express)
+# ConnectLocal: backend API (Node.js / Express)
 
-## Overview
-This directory contains the ConnectLocal REST API, implementing the endpoints documented in `docs/api-specs/`.
+REST API for the ConnectLocal app and admin website: `/api/v1/{auth, users, providers, search, bookings, messages,
+reviews, payments, admin, notifications, uploads, geo}` plus `/health` and `/health/db`.
 
-## Folder Structure
-See [`docs/architecture/Backend-Architecture.md`](../docs/architecture/Backend-Architecture.md) Section 4.2 for the full annotated folder structure and layering rationale.
+Needs **Node 22 or newer** (`@supabase/supabase-js` uses Node's built-in WebSocket).
+
+## How it is built
 
 ```
-backend/
-├── src/
-│   ├── config/
-│   ├── routes/
-│   ├── controllers/
-│   ├── services/
-│   ├── repositories/
-│   ├── middleware/
-│   ├── integrations/
-│   ├── utils/
-│   ├── validators/
-│   └── app.js
-├── tests/
-│   ├── unit/
-│   └── integration/
-├── migrations/
-├── server.js
-├── package.json
-└── .env.example
+routes/        HTTP: URLs, request validation (zod), status codes
+  └─ services/       business rules: who may do what, booking flow, payments, payouts
+       └─ repositories/  all database access (Supabase, service-role key)
+middleware/    auth (Supabase token -> public.users row, role), validation, rate limits, errors
+integrations/  PayFast, Supabase Storage (signed uploads), Nominatim (address search), email/push
+utils/         validators.js (same rules as the app), schedule.js (time slots, SAST), secure codes
+config/        Supabase clients, CORS, business constants (15% fee, 10% commission, ...)
 ```
 
-## Getting Started
-See the root [README.md](../README.md) Getting Started section and [`docs/deployment/Environment-Setup.md`](../docs/deployment/Environment-Setup.md) for full setup instructions.
+The repositories use the **service-role key, which bypasses RLS**, so every service checks ownership and role
+itself. The key lives only in `backend/.env` (git-ignored) and never goes to the app.
 
-## Key Dependencies
-- `express` — HTTP framework
-- `@supabase/supabase-js` — Supabase client (Auth, DB, Storage, Realtime)
-- `zod` — request validation
-- `jsonwebtoken` — JWT verification (Supabase-issued tokens)
-- `pino` — structured logging
-- `pg` — versioned SQL migrations
-- `jest` + `supertest` — testing
+## Run
 
-Nearby search uses PostGIS and the Flutter client supplies coordinates; the backend has no map vendor or geocoding API key.
+```bash
+npm install
+cp .env.example .env      # fill in the values
+npm run db:push           # apply ../supabase/migrations (npm run db:push:dry shows what it would run)
+npm start                 # http://localhost:3000, check /health/db
+```
 
-## API Documentation
-All endpoints are documented in [`docs/api-specs/`](../docs/api-specs/). Any new or changed endpoint must be reflected there in the same pull request per [CONTRIBUTING.md](../CONTRIBUTING.md).
+In Codespaces the database must be reached through the Supabase **Session pooler** (the direct host is IPv6-only).
+Step-by-step: [SETUP.md](../SETUP.md) and [START.md](../START.md).
 
-## Testing
-Run `npm test` for unit and integration suites. Set `DATABASE_URL` and run `npm run migrate` to apply pending SQL migrations. See [`docs/testing/Unit-Testing.md`](../docs/testing/Unit-Testing.md) and [`docs/testing/Integration-Testing.md`](../docs/testing/Integration-Testing.md) for conventions.
+## Checks
+
+```bash
+npm run lint              # eslint (auto-fixes locally; CI runs it without --fix)
+npm test                  # unit + integration tests (mocks and .env.test: no real database)
+bash scripts/smoke-test.sh                       # whole flow with curl against a running API (real database)
+node --env-file=.env scripts/e2e-booking-flow.mjs 3000   # the same, plus payment race checks
+```
+
+The two flow scripts create temporary users and delete them at the end.
+
+## API contracts
+
+[`docs/api-specs/`](../docs/api-specs/). Authentication details: [AUTH_IMPLEMENTATION.md](AUTH_IMPLEMENTATION.md).

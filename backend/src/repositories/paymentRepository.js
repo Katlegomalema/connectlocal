@@ -11,7 +11,7 @@ export const getBookingById = async (bookingId) => {
     .from('bookings')
     // Everything the payment flow reads: fee/balance amounts and their payment state.
     .select('id, customer_id, provider_id, status, total_amount, booking_fee_amount, booking_fee_status, '
-      + 'balance_amount, balance_status, balance_payment_method')
+      + 'balance_amount, balance_status, balance_payment_method, scheduled_start, scheduled_end')
     .eq('id', bookingId)
     .maybeSingle();
 
@@ -106,6 +106,14 @@ export const createPayout = async (payout) => {
   return data;
 };
 
+/** Another request created the same payment at the same moment (unique index on key / open payment). */
+export class DuplicatePaymentError extends ConflictError {
+  constructor() {
+    super('A payment for this is already being made');
+    this.code = 'DUPLICATE_PAYMENT';
+  }
+}
+
 export const createPayment = async (payment) => {
   const { data, error } = await supabase
     .from('payments')
@@ -113,7 +121,54 @@ export const createPayment = async (payment) => {
     .select('*')
     .single();
 
-  if (error?.code === '23505') throw new ConflictError('This part of the booking is already paid');
+  if (error?.code === '23505') {
+    const text = `${error.message} ${error.details || ''}`;
+    if (/uq_payments_idempotency_key|uq_payments_one_open_per_purpose/.test(text)) throw new DuplicatePaymentError();
+    throw new ConflictError('This part of the booking is already paid');
+  }
+  if (error) throw error;
+  return data;
+};
+
+/** The payment started with this Idempotency-Key, or null. */
+export const getPaymentByIdempotencyKey = async (key) => {
+  const { data, error } = await supabase
+    .from('payments')
+    .select('*')
+    .eq('idempotency_key', key)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+};
+
+/** The open (pending) or paid payment for a booking and purpose, paid first, or null. */
+export const getActivePayment = async (bookingId, purpose) => {
+  const { data, error } = await supabase
+    .from('payments')
+    .select('*')
+    .eq('booking_id', bookingId)
+    .eq('purpose', purpose)
+    .in('payment_status', ['paid', 'pending'])
+    .order('payment_status', { ascending: false }) // 'pending' < 'paid' alphabetically: paid first
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+};
+
+/**
+ * A verified COMPLETE ITN: payment paid + receipt + booking fee/balance paid, in ONE database transaction
+ * with the payment row locked (migration 20261106120000). Returns { outcome, ... }:
+ * paid | already_processed | amount_mismatch | duplicate_reference | not_found.
+ */
+export const applyPayfastPayment = async (paymentId, pfPaymentId, amount, raw) => {
+  const { data, error } = await supabase.rpc('apply_payfast_payment', {
+    p_payment_id: paymentId,
+    p_pf_payment_id: pfPaymentId,
+    p_amount: amount,
+    p_raw: raw
+  });
   if (error) throw error;
   return data;
 };
@@ -211,6 +266,9 @@ export default {
   createPayout,
   getPayoutByBookingId,
   createPayment,
+  getPaymentByIdempotencyKey,
+  getActivePayment,
+  applyPayfastPayment,
   updatePayment,
   listBookingIdsForCustomer,
   listBookingIdsForProvider,

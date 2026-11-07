@@ -11,7 +11,8 @@ Phone verification works in every build: the backend makes the 6-digit code and 
 app shows it on screen, because no paid SMS is used.
 
 The admin signs in on the admin site with a Supabase account whose `role` is `admin` (SETUP.md, step 4).
-Passwords need 8+ characters with a capital, a small letter, a number and a symbol.
+Passwords need 8+ characters with a capital, a small letter and a number. (Until the Supabase password policy is
+changed to match, see SETUP.md section 7, Supabase also asks for a symbol: use e.g. `Test@1234`.)
 
 ## Accounts to create (details in business-test-pack.zip)
 Customers: Naledi Khumalo, Sam Ndlovu. Providers ("I offer a service"): Lucas Doe, Thabo Mokoena, Ayanda Zulu,

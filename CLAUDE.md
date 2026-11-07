@@ -5,13 +5,13 @@ providers; an admin verifies businesses. Goal right now: **get the app working e
 Flutter app → Express backend API → Supabase Postgres.
 
 ## Repo layout
-- `backend/`: Node 18+/20, Express, ES modules (`"type": "module"`), `@supabase/supabase-js`, zod, jest.
+- `backend/`: Node 22+ (supabase-js needs it), Express, ES modules (`"type": "module"`), `@supabase/supabase-js`, zod, jest.
   - `server.js` → `src/app.js` mounts routes at `/api/v1/{auth,users,providers,search,bookings,messages,reviews,payments,admin,notifications}` + `/health`.
   - Layers: `routes/` → `services/` → `repositories/` (all DB access) → `config/supabase.js`.
   - Repositories use `supabaseAdmin` (service-role key, **bypasses RLS**). So the backend itself must
     check who may read/write what (ownership + role) in services/middleware.
   - `middleware/auth.js`: `verifyToken` checks the Supabase access token, then loads the `public.users` row (role, is_active).
-- `frontend/connect-local/`: the Flutter app (from `connect-local-v42.zip`; ignore v39). See SETUP.md to run it.
+- `frontend/connect-local/`: the Flutter app (imported from the frontend team's v42 zip; the zips were removed from the tree in Nov 2026, still in git history). See SETUP.md to run it.
   - Entry points: `lib/main.dart` (customer + provider app), `lib/main_admin.dart` (separate admin web app).
   - All data comes from the API: `lib/core/api_client.dart` (tokens, refresh, errors) + `lib/core/connect_local_repository.dart`
     (every endpoint) feed `lib/features/community/state/app_state.dart`. Only the sign-in tokens are kept on the device;
@@ -56,7 +56,7 @@ Flutter app → Express backend API → Supabase Postgres.
   validates it, and records every transaction (`payments`, `receipts`).
 
 ## Team and branches (Nov 2026)
-- We work on `fix/round-2` (and `delevop`); `origin/main` is still only the first scaffold commit.
+- We work on `delevop` (local `fix/round-2` is older). `origin/main` has PR #2 (delevop up to `93150b6`, 6 Nov 2026); later work goes to main by a new PR from `delevop`.
 - Teammates push frontend work as branches built on older code: Shuan (`frontend-booking-updates`, Flutter screens),
   radzivhonikharendwe (`delevop`). Merge them into our branch and keep the server-only app state (no device storage).
 - `origin/frontend` and `origin/separate-admin` are unrelated-history copies of the v39/v42 zips: do not merge them.

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/validators.dart';
+
 import '../widgets/action_feedback.dart';
 
 import '../../booking/screens/payment_method_screen.dart';
+import '../../booking/screens/payment_processing_screen.dart';
 import '../../shared/brand.dart';
 import '../../shared/booking_maps.dart';
 import '../models/models.dart';
@@ -43,6 +46,9 @@ class CustomerBookingDetailScreen extends StatelessWidget {
     final needsPayment = b.status == BookingStatus.completed &&
         !b.balancePaid &&
         b.serviceMethod == null;
+    // A request whose 15% booking fee was never confirmed (app closed or network lost during PayFast):
+    // finish paying it. The server returns the same payment, so this never charges twice.
+    final feeUnpaid = b.status == BookingStatus.pending && !app.feePaid(b) && !b.feeRefunded;
     // Can't cancel once the provider has been verified and the job has started.
     final canCancel = b.status == BookingStatus.pending ||
         (b.status == BookingStatus.confirmed && !b.pinVerified);
@@ -196,14 +202,23 @@ class CustomerBookingDetailScreen extends StatelessWidget {
                 ],
               ),
             ),
-            if (needsPayment || canReview)
+            if (needsPayment || canReview || feeUnpaid)
               Container(
                 padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
                 decoration: const BoxDecoration(
                   color: Colors.white,
                   border: Border(top: BorderSide(color: AppColors.hairline)),
                 ),
-                child: needsPayment
+                child: feeUnpaid
+                    ? PrimaryButton(
+                        'Finish paying the ${money(b.bookingFee)} booking fee',
+                        icon: Icons.lock_outline_rounded,
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => PaymentProcessingScreen(feeFor: b)),
+                        ),
+                      )
+                    : needsPayment
                     ? PrimaryButton(
                         'Pay ${money(b.balance)}',
                         icon: Icons.lock_outline_rounded,
@@ -338,6 +353,11 @@ class CustomerBookingDetailScreen extends StatelessWidget {
     // The controller is not disposed on purpose: the sheet is still animating
     // closed here and disposing it now can throw "used after being disposed".
     final text = comment.text;
+    final problem = Validators.text(text, max: 500, label: 'Your review');
+    if (sent == true && problem != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(duration: const Duration(seconds: 4), content: Text(problem)));
+      return;
+    }
     if (sent == true && context.mounted) {
       await runAction(context, app.addReview(b, rating: stars, comment: text), success: 'Thanks for your review!');
     }

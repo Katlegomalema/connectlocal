@@ -65,7 +65,7 @@ class _ProviderProfileScreenState extends State<ProviderProfileScreen> {
                       size: 96,
                       circle: true,
                       icon: Icons.person,
-                      photo: p.avatar,
+                      photo: p.displayPhoto, // profile picture, else a service photo
                       label: p.name,
                     ),
                   ),

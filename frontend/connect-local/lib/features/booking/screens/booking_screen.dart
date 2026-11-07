@@ -1,4 +1,7 @@
+import '../../shared/sa_time.dart';
 import 'package:flutter/material.dart';
+
+import '../../shared/validators.dart';
 import '../../community/utils/format.dart';
 
 import '../../community/screens/verify_phone_screen.dart';
@@ -19,7 +22,7 @@ class BookingScreen extends StatefulWidget {
   final String providerName;
   final String serviceId;
   final String serviceName;
-  final int hourlyRate;
+  final double hourlyRate;
 
   /// Fixed-price options of the service (empty = priced per hour).
   final List<ServicePackage> packages;
@@ -47,7 +50,7 @@ class _BookingScreenState extends State<BookingScreen> {
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December',
   ];
-  final DateTime _today = DateUtils.dateOnly(DateTime.now());
+  final DateTime _today = DateUtils.dateOnly(nowSast()); // booking days are South African days
   late DateTime _date = _today;
 
   /// The booked time slot (start). Null until the customer picks a free slot.
@@ -159,7 +162,7 @@ class _BookingScreenState extends State<BookingScreen> {
     }
   }
 
-  int get _serviceTotal => _hasPackages
+  double get _serviceTotal => _hasPackages
       ? _chosenPackage!.price
       : _fixed
           ? widget.hourlyRate
@@ -208,7 +211,7 @@ class _BookingScreenState extends State<BookingScreen> {
       return;
     }
     // Checked again now: the slot may have been taken or passed since it was shown.
-    if (!_slot!.isAfter(DateTime.now()) ||
+    if (!_slot!.isAfter(nowSast()) ||
         !AppScope.read(context).slotIsFree(widget.providerId, _slot!, _blockedMinutes)) {
       setState(() => _slot = null);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -219,11 +222,11 @@ class _BookingScreenState extends State<BookingScreen> {
       return;
     }
     final atBusiness = _atBusiness!;
-    if (!atBusiness && _address.text.trim().isEmpty) {
+    final textProblem = (!atBusiness ? Validators.address(_address.text) : null) ??
+        Validators.text(_notes.text, max: 1000, label: 'Notes');
+    if (textProblem != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            duration: Duration(seconds: 3),
-            content: Text('Enter the address where the provider should come')),
+        SnackBar(duration: const Duration(seconds: 3), content: Text(textProblem)),
       );
       return;
     }
@@ -463,8 +466,9 @@ class _BookingScreenState extends State<BookingScreen> {
   List<Widget> _houseCallAddressSection() => [
         _label('Your address'),
         const SizedBox(height: 8),
-        TextField(
+        ValidatedField(
           controller: _address,
+          validator: Validators.address,
           // Typing by hand replaces any spot chosen on the map.
           onChanged: (_) {
             if (_lat != null) setState(() { _lat = null; _lng = null; _fromGps = false; });
@@ -704,8 +708,9 @@ class _BookingScreenState extends State<BookingScreen> {
 
               _label('Additional Notes'),
               const SizedBox(height: 8),
-              TextField(
+              ValidatedField(
                 controller: _notes,
+                validator: (v) => Validators.text(v, max: 1000, label: 'Notes'),
                 maxLines: 4,
                 style: const TextStyle(fontSize: 14),
                 decoration: InputDecoration(

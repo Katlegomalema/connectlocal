@@ -1,3 +1,4 @@
+import '../../shared/sa_time.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -522,7 +523,7 @@ class AppState extends ChangeNotifier {
   /// The slots of [day] that have not started yet, each with whether a booking of [minutes] can start
   /// there (false = booked by someone else, or not enough time before closing).
   List<({DateTime start, bool free})> slotsFor(String providerId, DateTime day, int minutes) {
-    final now = DateTime.now();
+    final now = nowSast();
     return [
       for (final start in providerById(providerId).workingHours.slotStarts(day))
         if (start.isAfter(now)) (start: start, free: slotIsFree(providerId, start, minutes)),
@@ -573,7 +574,7 @@ class AppState extends ChangeNotifier {
     ServiceModel? service, {
     required String name,
     required String category,
-    required int price,
+    required double price,
     required String description,
     required List<PhotoRef> photos,
     List<ServicePackage> packages = const [],
@@ -655,6 +656,7 @@ class AppState extends ChangeNotifier {
     required double longitude,
     String idNumber = '', // checked by the admin on the ID document; never sent or stored (privacy)
     List<PhotoRef> photos = const [],
+    void Function(String step, int done, int total)? onProgress,
   }) async {
     final error = await _attempt((r) async {
       serverApplication = await r.submitApplication(
@@ -668,6 +670,7 @@ class AppState extends ChangeNotifier {
         registrationDoc: registrationDoc,
         idDoc: idDoc,
         photos: photos,
+        onProgress: onProgress,
       );
     });
     if (error != null) return error;
@@ -704,15 +707,15 @@ class AppState extends ChangeNotifier {
       List.unmodifiable(_bookings.toList()..sort((a, b) => b.dateTime.compareTo(a.dateTime)));
 
   List<Booking> get todayBookings {
-    final now = DateUtils.dateOnly(DateTime.now());
+    final now = DateUtils.dateOnly(nowSast());
     return providerBookings.where((booking) => DateUtils.dateOnly(booking.dateTime) == now).toList();
   }
 
   int get pendingCount => providerBookings.where((booking) => booking.status == BookingStatus.pending).length;
 
-  int get totalEarned => providerBookings
+  double get totalEarned => providerBookings
       .where((booking) => booking.status == BookingStatus.completed)
-      .fold(0, (sum, booking) => sum + booking.price);
+      .fold<double>(0, (sum, booking) => sum + booking.price);
 
   Booking? bookingById(String id) {
     for (final b in _bookings) {
@@ -756,8 +759,8 @@ class AppState extends ChangeNotifier {
           serviceName: (service['service_name'] as String?) ?? 'Service',
           clientName: (customer['full_name'] as String?) ?? '',
           customerId: json['customer_id'] as String?,
-          dateTime: DateTime.tryParse((json['scheduled_start'] as String?) ?? '')?.toLocal() ?? DateTime.now(),
-          price: _num(json['total_amount']).round(),
+          dateTime: sastWall(DateTime.tryParse((json['scheduled_start'] as String?) ?? '') ?? DateTime.now()),
+          price: _num(json['total_amount']),
           hours: (json['quantity'] as num?)?.toInt() ?? 1,
           packageName: json['package_name_at_booking'] as String?,
           bookingFee: _num(json['booking_fee_amount']),

@@ -114,6 +114,28 @@ export const hasBookingConflict = async (providerId, scheduledStart, scheduledEn
   return Boolean(data?.length);
 };
 
+/**
+ * The same customer's still-pending request for the same service and start time (a retried "Book", a double
+ * tap, the app reopened), or null. Returned instead of making a second booking (and a second booking fee).
+ */
+export const findPendingDuplicate = async ({
+  customerId, providerId, serviceId, scheduledStart
+}) => {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select(BOOKING_SELECT)
+    .eq('customer_id', customerId)
+    .eq('provider_id', providerId)
+    .eq('service_id', serviceId)
+    .eq('scheduled_start', scheduledStart)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+};
+
 /** The provider's working hours (provider_availability rows, day_of_week 0 = Sunday). */
 export const getProviderAvailability = async (providerId) => {
   const { data, error } = await supabase
@@ -139,6 +161,21 @@ export const listBusyTimes = async (providerId, fromIso, toIso) => {
     .limit(500);
   if (error) throw error;
   return data || [];
+};
+
+/** True when an ACCEPTED or IN-PROGRESS booking of this provider overlaps [from, to) (other than [exclude]). */
+export const hasFirmConflict = async (providerId, fromIso, toIso, excludeBookingId) => {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('id')
+    .eq('provider_id', providerId)
+    .in('status', ['accepted', 'in_progress'])
+    .lt('scheduled_start', toIso)
+    .gt('scheduled_end', fromIso)
+    .neq('id', excludeBookingId)
+    .limit(1);
+  if (error) throw error;
+  return Boolean(data?.length);
 };
 
 export const createBooking = async (bookingData) => {
@@ -194,6 +231,8 @@ export const listBookings = async ({
 
 export default {
   listBusyTimes,
+  hasFirmConflict,
+  findPendingDuplicate,
   getProviderAvailability,
   getBookingById,
   getServiceById,

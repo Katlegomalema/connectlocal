@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/validators.dart';
+
 import '../../shared/verification.dart';
 import '../models/models.dart';
 import '../state/app_state.dart';
@@ -82,7 +84,7 @@ class _PayoutDetailsScreenState extends State<PayoutDetailsScreen> {
   bool _saving = false;
 
   Future<void> _save() async {
-    if (_saving || !_formKey.currentState!.validate()) return;
+    if (_saving || !validateAndReveal(_formKey)) return;
     final app = AppScope.read(context);
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
@@ -172,13 +174,16 @@ class _PayoutDetailsScreenState extends State<PayoutDetailsScreen> {
                   validator: (v) => v == null ? 'Required' : null,
                 ),
                 _label('Account holder name'),
-                TextFormField(
+                ValidatedField(
                   controller: _holder,
                   textCapitalization: TextCapitalization.words,
                   style: const TextStyle(fontSize: 14),
                   decoration: _decoration('As it appears on your bank account'),
                   validator: (v) {
                     if (_required(v) != null) return 'Required';
+                    if (Validators.personName(v) != null && Validators.businessName(v) != null) {
+                      return 'Use the name on the bank account (letters, spaces, - and \')';
+                    }
                     if (!bankNameMatches(v!,
                         personName: app.customerName,
                         businessName: app.activeProvider.name)) {
@@ -189,7 +194,7 @@ class _PayoutDetailsScreenState extends State<PayoutDetailsScreen> {
                   },
                 ),
                 _label('Account number'),
-                TextFormField(
+                ValidatedField(
                   controller: _number,
                   keyboardType: TextInputType.number,
                   style: const TextStyle(fontSize: 14),
@@ -197,7 +202,7 @@ class _PayoutDetailsScreenState extends State<PayoutDetailsScreen> {
                   validator: (v) => _required(v) ?? checkBankAccountNumber(v!),
                 ),
                 _label('Branch code'),
-                TextFormField(
+                ValidatedField(
                   controller: _branch,
                   keyboardType: TextInputType.number,
                   style: const TextStyle(fontSize: 14),

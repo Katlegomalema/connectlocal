@@ -8,6 +8,7 @@ import * as notificationService from './notificationService.js';
 import * as storage from '../integrations/storage.js';
 import logger from '../utils/logger.js';
 import { toLatLng } from '../utils/geo.js';
+import { BUSINESS_NAME, checkRegistrationNumber } from '../utils/validators.js';
 import {
   AuthorizationError, ConflictError, NotFoundError, ValidationError
 } from '../utils/errors.js';
@@ -35,9 +36,9 @@ const notifySafely = async (userId, notification) => {
 
 const normaliseRegistrationNumber = (value) => {
   const number = typeof value === 'string' ? value.trim() : '';
-  if (!REGISTRATION_NUMBER.test(number)) {
-    throw new ValidationError('Registration number must look like 2019/123456/07 (YYYY/NNNNNN/TT)');
-  }
+  // Same rule as the app and the route schema (utils/validators.js): format, year and company type.
+  const problem = checkRegistrationNumber(number);
+  if (problem) throw new ValidationError(problem);
   return number;
 };
 
@@ -46,9 +47,6 @@ const assertRegistrationNumberFree = async (registrationNumber, exceptProviderId
     throw new ConflictError('A business with this registration number has already applied');
   }
 };
-
-/** At least one letter; letters, digits, spaces and & . , ' ( ) - only (same rule as the app). */
-export const BUSINESS_NAME = /^(?=.*\p{L})[\p{L}\p{N}\s&.,'()-]+$/u;
 
 const assertBusinessName = (name) => {
   if (!name || name.length < 2 || name.length > 150 || !BUSINESS_NAME.test(name)) {
@@ -152,12 +150,40 @@ const validateService = (input, partial = false) => {
   return service;
 };
 
+/**
+ * Business photos for customers, newest first: the newest one is the business's profile picture
+ * (the app uploads a new picture as a new photo).
+ */
+export const publicGallery = (gallery) => [...gallery]
+  .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+  .map((photo) => ({ id: photo.id, url: photo.image_url, caption: photo.caption ?? null }));
+
+/** Attach photos (and only active packages for the public) to a list of services. */
+export const withServiceExtras = async (services, { includeInactivePackages = false } = {}) => {
+  const images = await providerRepository.listServiceImages(services.map((service) => service.id));
+  return services.map((service) => ({
+    ...service,
+    packages: (service.packages || [])
+      .filter((pkg) => includeInactivePackages || pkg.is_active)
+      .sort((a, b) => a.sort_order - b.sort_order || Number(a.price) - Number(b.price)),
+    photos: images
+      .filter((image) => image.service_id === service.id)
+      .map((image) => ({ id: image.id, url: image.image_url }))
+  }));
+};
+
 export const getPublicProvider = async (providerId) => {
   const provider = await providerRepository.getProviderById(providerId);
   if (provider.verification_status !== 'verified' || !provider.is_active) throw new NotFoundError('Provider not found');
   const profile = Object.fromEntries(providerProfileFields.map((field) => [field, provider[field] ?? null]));
   profile.location = publicLocation(profile.location);
-  profile.services = await providerRepository.getProviderServices(providerId);
+  const [services, gallery] = await Promise.all([
+    providerRepository.getProviderServices(providerId),
+    providerRepository.listGallery(providerId)
+  ]);
+  profile.services = await withServiceExtras(services);
+  profile.photos = publicGallery(gallery);
+  profile.photoUrl = profile.photos[0]?.url ?? null;
   return profile;
 };
 
@@ -362,20 +388,6 @@ export const removeServicePhoto = async (actor, serviceId, imageId) => {
   return { id: image.id, removed: true };
 };
 
-/** Attach photos (and only active packages for the public) to a list of services. */
-const withServiceExtras = async (services, { includeInactivePackages = false } = {}) => {
-  const images = await providerRepository.listServiceImages(services.map((service) => service.id));
-  return services.map((service) => ({
-    ...service,
-    packages: (service.packages || [])
-      .filter((pkg) => includeInactivePackages || pkg.is_active)
-      .sort((a, b) => a.sort_order - b.sort_order || Number(a.price) - Number(b.price)),
-    photos: images
-      .filter((image) => image.service_id === service.id)
-      .map((image) => ({ id: image.id, url: image.image_url }))
-  }));
-};
-
 /** The provider's own services, including inactive ones (works before approval too). */
 export const getOwnServices = async (actor) => {
   const provider = await getOwnProvider(actor);
@@ -529,7 +541,9 @@ export const deactivatePackage = async (actor, providerId, serviceId, packageId)
 };
 
 export const getAvailability = async (providerId) => {
-  await providerRepository.getProviderById(providerId);
+  const provider = await providerRepository.getProviderById(providerId);
+  // Public route: only approved, active businesses (same as their services).
+  if (provider.verification_status !== 'verified' || !provider.is_active) throw new NotFoundError('Provider not found');
   const [weekly, timeOff] = await Promise.all([
     providerRepository.getProviderAvailability(providerId),
     providerRepository.listProviderTimeOff(providerId)

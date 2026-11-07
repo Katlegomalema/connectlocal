@@ -140,8 +140,9 @@ class ApiClient {
   Future<Map<String, dynamic>> get(String path, {bool auth = true}) =>
       _send('GET', path, auth: auth);
 
-  Future<Map<String, dynamic>> post(String path, {Object? body, bool auth = true}) =>
-      _send('POST', path, body: body, auth: auth);
+  /// [headers]: extra request headers, e.g. `Idempotency-Key` (so a retried POST is not done twice).
+  Future<Map<String, dynamic>> post(String path, {Object? body, bool auth = true, Map<String, String>? headers}) =>
+      _send('POST', path, body: body, auth: auth, headers: headers);
 
   Future<Map<String, dynamic>> patch(String path, {Object? body, bool auth = true}) =>
       _send('PATCH', path, body: body, auth: auth);
@@ -158,6 +159,7 @@ class ApiClient {
     Object? body,
     required bool auth,
     bool isRetry = false,
+    Map<String, String>? headers,
   }) async {
     if (!isConfigured) {
       throw const ApiException(
@@ -167,24 +169,26 @@ class ApiClient {
     }
     if (auth && _expiresSoon && tokens.hasSession) await refreshSession();
 
-    final response = await _requestWithRetries(method, path, body: body, bearer: auth ? tokens.accessToken : null);
+    final response =
+        await _requestWithRetries(method, path, body: body, bearer: auth ? tokens.accessToken : null, headers: headers);
 
     // Only OUR API's 401 (JSON) means "token expired". The Codespace sign-in gate also answers 401, but
     // refreshing would not help and must never log the person out.
     if (response.statusCode == 401 && auth && !isRetry && tokens.hasSession && !_isGate(response)) {
       await refreshSession();
-      return _send(method, path, body: body, auth: auth, isRetry: true);
+      return _send(method, path, body: body, auth: auth, isRetry: true, headers: headers);
     }
     return _decode(response);
   }
 
   /// Sends the request; a GET is tried again (max [maxGetRetries] times) after a network failure, a timeout,
   /// or a 502/503/504. Anything else is sent exactly once.
-  Future<http.Response> _requestWithRetries(String method, String path, {Object? body, String? bearer}) async {
+  Future<http.Response> _requestWithRetries(String method, String path,
+      {Object? body, String? bearer, Map<String, String>? headers}) async {
     final retries = method == 'GET' ? maxGetRetries : 0;
     for (var attempt = 0;; attempt++) {
       try {
-        final response = await _rawRequest(method, path, body: body, bearer: bearer);
+        final response = await _rawRequest(method, path, body: body, bearer: bearer, headers: headers);
         final busy = response.statusCode == 502 || response.statusCode == 503 || response.statusCode == 504;
         if (!busy || attempt >= retries) return response;
       } on ApiException catch (e) {
@@ -200,8 +204,10 @@ class ApiClient {
     return expires != null && DateTime.now().isAfter(expires.subtract(const Duration(seconds: 60)));
   }
 
-  Future<http.Response> _rawRequest(String method, String path, {Object? body, String? bearer}) async {
+  Future<http.Response> _rawRequest(String method, String path,
+      {Object? body, String? bearer, Map<String, String>? headers}) async {
     final request = http.Request(method, Uri.parse('$_base$path'))
+      ..headers.addAll(headers ?? const {})
       ..headers['Accept'] = 'application/json'
       // A redirect means "sign-in page" (private Codespace port), never a real answer of our API.
       ..followRedirects = false;
@@ -375,6 +381,9 @@ class ApiClient {
       message = serverMessage.isNotEmpty && !serverMessage.startsWith('Too many requests')
           ? serverMessage
           : 'Too many attempts. Please wait a minute and try again.';
+    } else if (_explainedServerCodes.contains(code) && serverMessage.isNotEmpty) {
+      // The server explains what failed outside the app, e.g. "The confirmation email could not be sent".
+      message = serverMessage;
     } else if (status == 503) {
       message = 'ConnectLocal is busy or being updated. Please try again in a minute.';
     } else if (status >= 500) {
@@ -384,6 +393,14 @@ class ApiClient {
     }
     return ApiException(message, statusCode: status, code: code, fieldErrors: fieldErrors);
   }
+
+  /// Server errors whose message is written for people (not raw details), so the app shows them as they are.
+  static const _explainedServerCodes = {
+    'EXTERNAL_SERVICE_ERROR',
+    'EMAIL_SEND_FAILED',
+    'SIGNUP_EMAIL_UNAVAILABLE',
+    'SIGNUP_DISABLED',
+  };
 
   /// Convenience for callers: the `data` object of an answer.
   static Map<String, dynamic> dataOf(Map<String, dynamic> json) => _data(json);

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/validators.dart';
+
 import '../../shared/geocoding.dart';
 import '../../shared/map_picker_screen.dart';
 
@@ -89,6 +91,7 @@ class _ProviderBusinessProfileScreenState extends State<ProviderBusinessProfileS
   Future<void> _save() async {
     final app = AppScope.read(context);
     final messenger = ScaffoldMessenger.of(context);
+    if (!validateAndReveal(_formKey)) return;
     if (!_offersVisit && !_offersHouseCall) {
       messenger.showSnackBar(const SnackBar(
           duration: Duration(seconds: 3), content: Text('Choose at least one way customers can book you.')));
@@ -178,8 +181,10 @@ class _ProviderBusinessProfileScreenState extends State<ProviderBusinessProfileS
     );
   }
 
+  final _formKey = GlobalKey<FormState>();
+
   Widget _field(String label, TextEditingController controller,
-      {int maxLines = 1, ValueChanged<String>? onChanged}) {
+      {int maxLines = 1, ValueChanged<String>? onChanged, required String? Function(String?) validator}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -187,10 +192,11 @@ class _ProviderBusinessProfileScreenState extends State<ProviderBusinessProfileS
           padding: const EdgeInsets.only(top: 14, bottom: 6),
           child: Text(label, style: const TextStyle(fontSize: 13, color: AppColors.textGrey)),
         ),
-        TextField(
+        ValidatedField(
           controller: controller,
           maxLines: maxLines,
           onChanged: onChanged,
+          validator: validator,
           style: const TextStyle(
               fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.textDark),
           decoration: InputDecoration(
@@ -258,11 +264,20 @@ class _ProviderBusinessProfileScreenState extends State<ProviderBusinessProfileS
                 ],
               ),
               const SizedBox(height: 10),
-              _field('Business Name', _name),
-              _field('Description', _description, maxLines: 3),
-              _field('Business address', _location, onChanged: (_) {
-                if (_point != null) setState(() => _point = null);
-              }),
+              Form(
+                key: _formKey,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _field('Business Name', _name, validator: Validators.businessName),
+                    _field('Description', _description,
+                        maxLines: 3, validator: (v) => Validators.text(v, max: 2000, label: 'The description')),
+                    _field('Business address', _location, validator: Validators.address, onChanged: (_) {
+                      if (_point != null) setState(() => _point = null);
+                    }),
+                  ],
+                ),
+              ),
               Wrap(
                 children: [
                   TextButton.icon(

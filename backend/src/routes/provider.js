@@ -9,6 +9,10 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken, requireRole, optionalToken } from '../middleware/auth.js';
 import { validateBody, validateUuidParam } from '../middleware/validation.js';
 import * as providerService from '../services/providerService.js';
+import {
+  BUSINESS_NAME, PERSON_NAME, bankAccountSchema, branchCodeSchema, businessNameSchema, lineSchema, priceSchema,
+  registrationNumberSchema, textSchema
+} from '../utils/validators.js';
 import * as payoutService from '../services/payoutService.js';
 import * as scheduleService from '../services/scheduleService.js';
 import * as searchService from '../services/searchService.js';
@@ -20,37 +24,39 @@ const locationSchema = z.object({
   lat: z.coerce.number().min(-90).max(90),
   lng: z.coerce.number().min(-180).max(180)
 }).strict();
-const registrationNumberSchema = z.string().trim()
-  .regex(/^\d{4}\/\d{6}\/\d{2}$/, 'Registration number must look like 2019/123456/07 (YYYY/NNNNNN/TT)');
+const placeSchema = (max, label) => lineSchema(max, { label });
+const postalCodeSchema = z.string().trim().regex(/^\d{4}$/, 'Postal codes have 4 digits');
+const holderNameSchema = lineSchema(150, { min: 2, label: 'The account holder' })
+  .refine((v) => PERSON_NAME.test(v) || BUSINESS_NAME.test(v), 'Use the name on the bank account (letters, spaces, - and \')');
 const providerUpdateSchema = z.object({
-  businessName: z.string().min(2).max(150).optional(),
+  businessName: businessNameSchema.optional(),
   registrationNumber: registrationNumberSchema.optional(),
-  category: z.string().min(2).max(50).optional(),
+  category: lineSchema(100, { min: 2, label: 'The category' }).optional(),
   categoryId: z.string().uuid().optional(),
-  description: z.string().max(5000).optional(),
-  streetAddress: z.string().max(150).optional(),
-  suburb: z.string().max(100).optional(),
-  city: z.string().max(100).optional(),
-  province: z.string().max(100).optional(),
-  postalCode: z.string().max(20).optional(),
+  description: textSchema(5000, { label: 'The description' }).optional(),
+  streetAddress: lineSchema(150, { min: 5, label: 'The address' }).optional(),
+  suburb: placeSchema(100, 'The suburb').optional(),
+  city: placeSchema(100, 'The city').optional(),
+  province: placeSchema(100, 'The province').optional(),
+  postalCode: postalCodeSchema.optional(),
   location: locationSchema.optional(),
   serviceAreaRadiusKm: z.coerce.number().int().min(1).max(50)
     .optional()
 }).strict();
 const serviceSchema = z.object({
-  title: z.string().min(2).max(150),
-  description: z.string().max(5000).optional(),
-  category: z.string().min(2).max(50),
-  price: z.coerce.number().min(0).max(1000000),
+  title: lineSchema(100, { min: 2, label: 'The service name' }),
+  description: textSchema(5000, { label: 'The description' }).optional(),
+  category: lineSchema(100, { min: 2, label: 'The category' }),
+  price: priceSchema,
   durationMinutes: z.coerce.number().int().min(1).max(1440),
   pricingType: z.enum(['hourly', 'fixed', 'package']).optional(),
   isActive: z.boolean().optional()
 }).strict();
 const updateServiceSchema = serviceSchema.partial();
 const packageSchema = z.object({
-  name: z.string().min(2).max(100),
-  description: z.string().max(2000).nullable().optional(),
-  price: z.coerce.number().positive().max(1000000),
+  name: lineSchema(100, { min: 2, label: 'The package name' }),
+  description: textSchema(1000, { label: 'The package description' }).nullable().optional(),
+  price: priceSchema,
   durationMinutes: z.coerce.number().int().min(1).max(1440)
     .optional(),
   sortOrder: z.number().int().optional(),
@@ -58,16 +64,16 @@ const packageSchema = z.object({
 }).strict();
 const updatePackageSchema = packageSchema.partial();
 const registerProviderSchema = z.object({
-  businessName: z.string().min(2).max(150),
+  businessName: businessNameSchema,
   registrationNumber: registrationNumberSchema,
-  category: z.string().min(2).max(50).optional(),
+  category: lineSchema(100, { min: 2, label: 'The category' }).optional(),
   categoryId: z.string().uuid().optional(),
-  description: z.string().max(5000).optional(),
-  streetAddress: z.string().max(150).optional(),
-  suburb: z.string().max(100).optional(),
-  city: z.string().max(100).optional(),
-  province: z.string().max(100).optional(),
-  postalCode: z.string().max(20).optional(),
+  description: textSchema(5000, { label: 'The description' }).optional(),
+  streetAddress: lineSchema(150, { min: 5, label: 'The address' }).optional(),
+  suburb: placeSchema(100, 'The suburb').optional(),
+  city: placeSchema(100, 'The city').optional(),
+  province: placeSchema(100, 'The province').optional(),
+  postalCode: postalCodeSchema.optional(),
   location: locationSchema.optional(),
   latitude: z.coerce.number().min(-90).max(90).optional(),
   longitude: z.coerce.number().min(-180).max(180).optional(),
@@ -86,7 +92,7 @@ const documentSchema = z.object({
 }).strict();
 const photoSchema = z.object({
   storagePath: z.string().min(10).max(300), // from POST /uploads/sign (purpose provider_photo)
-  caption: z.string().max(200).optional()
+  caption: textSchema(200, { label: 'The caption' }).optional()
 }).strict();
 
 const registerProviderHandler = asyncHandler(async (req, res) => {
@@ -237,11 +243,11 @@ router.delete('/me/services/:serviceId/photos/:imageId', verifyToken, requireRol
 
 // ---- payouts: bank details (account number encrypted, only last 4 digits returned) + payout history ----
 const payoutDetailsSchema = z.object({
-  bankName: z.string().trim().min(2).max(100),
+  bankName: lineSchema(100, { min: 2, label: 'The bank' }),
   accountType: z.enum(['Cheque / Current', 'Savings', 'Transmission']),
-  accountHolderName: z.string().trim().min(2).max(150),
-  accountNumber: z.string().trim().regex(/^[\d\s-]{9,15}$/, 'Account numbers have 9 to 11 digits'),
-  branchCode: z.string().trim().regex(/^\d{6}$/, 'Branch codes have 6 digits')
+  accountHolderName: holderNameSchema,
+  accountNumber: bankAccountSchema,
+  branchCode: branchCodeSchema
 }).strict();
 
 router.get('/me/payout-details', verifyToken, requireRole('provider'), asyncHandler(async (req, res) => {

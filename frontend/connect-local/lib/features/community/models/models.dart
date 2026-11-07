@@ -206,7 +206,7 @@ class ReviewItem {
 /// or "Install 3 CCTV cameras", each with its own fixed price.
 class ServicePackage {
   String name;
-  int price;
+  double price;
   String description;
 
   ServicePackage({required this.name, required this.price, this.description = ''});
@@ -221,7 +221,7 @@ class ServiceModel {
   final String id;
   String name;
   String category;
-  int price;
+  double price;
   String description;
   List<PhotoRef> photos;
   double? rating;
@@ -263,10 +263,10 @@ class ServiceModel {
 
   /// "R350/hour", "R150" (fixed) or "From R1200" (packages) – used everywhere a price is listed.
   String get priceLabel => hasPackages
-      ? 'From R$price'
+      ? 'From ${_rand(price)}'
       : isFixedPrice
-          ? 'R$price'
-          : 'R$price/hour';
+          ? _rand(price)
+          : '${_rand(price)}/hour';
 }
 
 class ProviderModel {
@@ -322,7 +322,11 @@ class ProviderModel {
     this.distanceIsLive = false,
     this.verified = false,
     this.description = '',
+    this.gallery = const [],
   });
+
+  /// Photos of the business (newest first), uploaded by the provider.
+  List<PhotoRef> gallery;
 
   /// The business description (the provider's own business, from the server).
   String description;
@@ -343,11 +347,18 @@ class ProviderModel {
     return null;
   }
 
-  /// Every photo from this provider's active services (their portfolio).
-  List<PhotoRef> get portfolio => [
+  /// The business photos, then every photo from this provider's active services (their portfolio).
+  List<PhotoRef> get portfolio {
+    final seen = <String>{};
+    return [
+      for (final photo in [
+        ...gallery,
         for (final service in services)
           if (service.active) ...service.photos,
-      ];
+      ])
+        if (seen.add(photo.url ?? 'local-${identityHashCode(photo)}')) photo,
+    ];
+  }
 
   List<ServiceModel> get activeServices =>
       services.where((service) => service.active).toList(growable: false);
@@ -369,7 +380,7 @@ class Booking {
 
   /// Service cost for all hours (rate x hours). This is what the provider
   /// earns; the deposit is not included.
-  final int price;
+  final double price;
 
   /// Deposit (15% of [price], exact to the cent) paid by the customer with the request.
   final double bookingFee;
@@ -455,7 +466,7 @@ class Booking {
 
   /// What the customer pays in total. The 15% deposit counts
   /// toward the price, so the total is just [price].
-  int get customerTotal => price;
+  double get customerTotal => price;
 
   /// What is still to pay after the job: the price minus the deposit (to the cent).
   double get balance => balanceAmount ?? (price > bookingFee ? roundMoney(price - bookingFee) : 0);
@@ -685,4 +696,10 @@ class AdminUser {
   });
 
   bool get isActive => status == 'active';
+}
+
+/// R450 / R349.99 (same as utils/format.dart money(), kept here so models do not import the UI utilities).
+String _rand(num amount) {
+  final cents = (amount * 100).round();
+  return cents % 100 == 0 ? 'R${cents ~/ 100}' : 'R${(cents / 100).toStringAsFixed(2)}';
 }

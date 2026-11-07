@@ -8,7 +8,7 @@ class BookingRequest {
   final String providerName;
   final String serviceId;
   final String serviceName;
-  final int hourlyRate;
+  final double hourlyRate;
   final int hours;
 
   /// Set when the customer chose a package ([hourlyRate] then holds the package price).
@@ -49,7 +49,7 @@ class BookingRequest {
   });
 
   /// Service cost: rate x hours, or the package price (what the provider earns).
-  int get serviceTotal => hourlyRate * hours;
+  double get serviceTotal => roundMoney(hourlyRate * hours);
 
   /// Deposit paid now.
   double get fee => bookingFeeFor(serviceTotal);

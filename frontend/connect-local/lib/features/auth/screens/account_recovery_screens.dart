@@ -233,7 +233,6 @@ class _CreateNewPasswordScreenState extends State<CreateNewPasswordScreen> {
   bool get _hasUpper => RegExp(r'[A-Z]').hasMatch(_password.text);
   bool get _hasNumber => RegExp(r'[0-9]').hasMatch(_password.text);
   bool get _hasLower => RegExp(r'[a-z]').hasMatch(_password.text);
-  bool get _hasSymbol => RegExp(r'[^A-Za-z0-9]').hasMatch(_password.text);
 
   bool _saving = false;
 
@@ -380,7 +379,6 @@ class _CreateNewPasswordScreenState extends State<CreateNewPasswordScreen> {
           _rule('At least one uppercase letter', _hasUpper),
           _rule('At least one number', _hasNumber),
           _rule('At least one small letter', _hasLower),
-          _rule('At least one symbol (e.g. !)', _hasSymbol),
           const SizedBox(height: 28),
           FigmaButton('Update Password', onPressed: _update),
         ],

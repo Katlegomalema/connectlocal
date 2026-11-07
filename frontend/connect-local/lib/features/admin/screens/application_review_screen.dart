@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../shared/validators.dart';
+
 import '../../community/models/models.dart';
 import '../../community/state/app_state.dart';
 import '../../community/theme/app_theme.dart';
@@ -120,6 +122,12 @@ class _ApplicationReviewScreenState extends State<ApplicationReviewScreen> {
     );
     controller.dispose();
     if (reason == null || !mounted) return;
+    final problem = Validators.text(reason, min: 3, max: 1000, label: 'The reason');
+    if (problem != null) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(duration: const Duration(seconds: 3), content: Text(problem)));
+      return;
+    }
     if (reason.isEmpty) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(duration: Duration(seconds: 3), content: Text('Please give a reason')));

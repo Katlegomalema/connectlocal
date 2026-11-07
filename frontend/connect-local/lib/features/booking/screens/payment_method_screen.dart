@@ -62,7 +62,9 @@ class _PaymentMethodScreenState extends State<PaymentMethodScreen> {
       );
       return;
     }
-    Navigator.push(
+    // Awaited: the Pay button shows a spinner and ignores taps until the person is back from the payment
+    // screen, so a quick double tap can never open two payments (or create two bookings).
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => PaymentProcessingScreen(

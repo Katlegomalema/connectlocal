@@ -30,7 +30,7 @@ const TERMINAL_STATUSES = ['completed', 'cancelled', 'rejected'];
 const parseStartTime = (value) => {
   const date = new Date(value);
   if (!value || Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) {
-    throw new ValidationError('scheduledStart must be a valid future date');
+    throw new ValidationError('That date and time is in the past. Please choose a later time.');
   }
 
   const maxAdvanceDays = Number(process.env.MAX_BOOKING_ADVANCE_DAYS || 365);
@@ -178,6 +178,15 @@ export const createBooking = async (actor, bookingData) => {
   }
 
   const scheduledStart = parseStartTime(bookingData.scheduledStart);
+  // Sent twice (slow network, double tap, app reopened)? Return the first request, never a second booking fee.
+  const duplicate = await bookingRepository.findPendingDuplicate({
+    customerId: actor.id,
+    providerId: service.provider_id,
+    serviceId: service.id,
+    scheduledStart: scheduledStart.toISOString()
+  });
+  if (duplicate) return { ...publicBooking(duplicate, actor), reused: true };
+
   const scheduledEnd = new Date(scheduledStart.getTime() + blockedMinutes * 60000);
   const workingHours = hoursFromRows(await bookingRepository.getProviderAvailability(provider.id));
   if (!fitsWorkingHours(workingHours, scheduledStart, blockedMinutes)) {
@@ -251,6 +260,16 @@ export const acceptBooking = async (actor, bookingId) => {
   if (booking.status !== 'pending') throw new ConflictError('Only pending bookings can be accepted');
   if (booking.booking_fee_status !== 'paid') {
     throw new ConflictError('The customer has not paid the booking fee yet');
+  }
+  // The time may have been taken meanwhile (e.g. this request waited unpaid longer than its hold).
+  const gapMs = BOOKING_GAP_MINUTES * 60000;
+  if (booking.scheduled_start && booking.scheduled_end && await bookingRepository.hasFirmConflict(
+    booking.provider_id,
+    new Date(new Date(booking.scheduled_start).getTime() - gapMs).toISOString(),
+    new Date(new Date(booking.scheduled_end).getTime() + gapMs).toISOString(),
+    booking.id
+  )) {
+    throw new ConflictError('You already have an accepted booking at this time. Decline this request instead.');
   }
   // CLAUDE.md: providers need bank details before accepting bookings (so the payout has somewhere to go).
   if (!(await payoutService.hasPayoutDetails(booking.provider_id))) {
@@ -388,11 +407,17 @@ export const startBooking = async (actor, bookingId, pin) => {
   }
   if (!booking.arrival_pin_hash) throw new ConflictError('This booking has no arrival PIN yet');
 
-  // The attempt counter is part of the update condition, so two parallel guesses cannot both count as one.
-  if (!hashesMatch(booking.arrival_pin_hash, hashArrivalPin(booking.id, pin))) {
+  // Use up a try BEFORE comparing. The count we read is part of the update condition, so of many guesses sent
+  // at the same moment only one gets this try; the others are refused (no burst of free guesses).
+  try {
     await bookingRepository.updateBooking(bookingId, ['accepted'], {
       arrival_pin_attempts: attempts + 1
     }, { arrival_pin_attempts: attempts });
+  } catch (error) {
+    if (error instanceof ConflictError) throw new ConflictError('Another PIN check is running. Try again in a moment.');
+    throw error;
+  }
+  if (!hashesMatch(booking.arrival_pin_hash, hashArrivalPin(booking.id, pin))) {
     const left = ARRIVAL_PIN_MAX_ATTEMPTS - attempts - 1;
     throw new ValidationError(left > 0 ? `Wrong PIN. ${left} tries left.` : 'Wrong PIN. No tries left.');
   }
@@ -401,7 +426,7 @@ export const startBooking = async (actor, bookingId, pin) => {
     status: 'in_progress',
     status_changed_by: actor.id,
     arrival_pin_verified_at: new Date().toISOString()
-  }, { arrival_pin_attempts: attempts });
+  }, { arrival_pin_attempts: attempts + 1 });
   await notifyBookingEvent('started', bookingId);
   return publicBooking(updated, actor);
 };

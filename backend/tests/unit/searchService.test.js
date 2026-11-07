@@ -4,6 +4,7 @@ const repository = {
   searchProvidersByLocation: jest.fn(),
   listActiveServicesForProviders: jest.fn(),
   listGallery: jest.fn(),
+  listServiceImages: jest.fn(),
   searchProvidersByText: jest.fn(),
   listCategories: jest.fn(),
   listFeaturedProviders: jest.fn(),
@@ -17,7 +18,11 @@ jest.unstable_mockModule('../../src/repositories/providerRepository.js', () => r
 const searchService = await import('../../src/services/searchService.js');
 
 describe('Search service', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    repository.listGallery.mockResolvedValue([]);
+    repository.listServiceImages.mockResolvedValue([]);
+  });
 
   test('applies rating, category, and price filters to nearby providers', async () => {
     repository.searchProvidersByLocation.mockResolvedValue([
@@ -87,5 +92,25 @@ describe('Search service', () => {
     });
     expect(result.providers[0]).not.toHaveProperty('location');
     expect(result.providers[0].services[0].packages).toEqual([{ name: '1 camera', price: 1200, is_active: true }]);
+  });
+
+  test('customers get every business photo (newest = profile picture) and each service\'s photos', async () => {
+    repository.searchProvidersByText.mockResolvedValue({
+      providers: [{ id: 'p1', business_name: 'Setla Mechanics', latitude: -25.7, longitude: 28.2 }], total: 1, page: 1, pages: 1
+    });
+    repository.listActiveServicesForProviders.mockResolvedValue([{ id: 's1', provider_id: 'p1', service_name: 'Service' }]);
+    repository.listGallery.mockResolvedValue([
+      { id: 'g1', provider_id: 'p1', image_url: 'https://cdn.test/old.jpg', created_at: '2026-11-01T10:00:00Z' },
+      { id: 'g2', provider_id: 'p1', image_url: 'https://cdn.test/new.jpg', created_at: '2026-11-06T10:00:00Z' }
+    ]);
+    repository.listServiceImages.mockResolvedValue([
+      { id: 'i1', service_id: 's1', image_url: 'https://cdn.test/engine.jpg', sort_order: 0 }
+    ]);
+
+    const [provider] = (await searchService.searchProviders('', undefined, 1, 20)).providers;
+
+    expect(provider.photoUrl).toBe('https://cdn.test/new.jpg');
+    expect(provider.photos.map((photo) => photo.url)).toEqual(['https://cdn.test/new.jpg', 'https://cdn.test/old.jpg']);
+    expect(provider.services[0].photos).toEqual([{ id: 'i1', url: 'https://cdn.test/engine.jpg' }]);
   });
 });

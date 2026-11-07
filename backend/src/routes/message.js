@@ -9,6 +9,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validation.js';
 import * as messageService from '../services/messageService.js';
+import { textSchema } from '../utils/validators.js';
 import { ValidationError } from '../utils/errors.js';
 
 const router = express.Router();
@@ -17,8 +18,8 @@ const sendMessageSchema = z.object({
   conversationId: z.string().uuid().optional(),
   receiverId: z.string().uuid().optional(),
   bookingId: z.string().uuid().optional(),
-  body: z.string().min(1).max(2000).optional(),
-  messageText: z.string().min(1).max(2000).optional()
+  body: textSchema(2000, { min: 1, label: 'The message' }).optional(),
+  messageText: textSchema(2000, { min: 1, label: 'The message' }).optional()
 }).strict().refine((value) => value.body || value.messageText, 'body or messageText is required');
 const conversationSchema = z.object({
   otherUserId: z.string().min(1).optional(),

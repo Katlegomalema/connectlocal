@@ -9,13 +9,14 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { verifyToken, requireRole } from '../middleware/auth.js';
 import { validateBody, validateUuidParam } from '../middleware/validation.js';
 import * as adminService from '../services/adminService.js';
+import { textSchema } from '../utils/validators.js';
 
 const router = express.Router();
-const rejectSchema = z.object({ reason: z.string().trim().min(3).max(1000) }).strict();
+const rejectSchema = z.object({ reason: textSchema(1000, { min: 3, label: 'The reason' }) }).strict();
 const updateUserSchema = z.object({ status: z.enum(['active', 'suspended', 'deactivated']) }).strict();
 const disputeUpdateSchema = z.object({
   status: z.enum(['under_review', 'resolved', 'rejected']).default('resolved'),
-  resolutionNotes: z.string().max(5000).optional()
+  resolutionNotes: textSchema(5000, { label: 'The notes' }).optional()
 }).strict();
 
 // Middleware: Ensure user is admin

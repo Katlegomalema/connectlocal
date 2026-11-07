@@ -4,6 +4,7 @@
  */
 
 import { supabase, supabaseAdmin } from '../config/supabase.js';
+import logger from '../utils/logger.js';
 import * as userRepository from '../repositories/userRepository.js';
 import * as phoneOtpRepository from '../repositories/phoneOtpRepository.js';
 import {
@@ -11,7 +12,8 @@ import {
 } from '../config/business.js';
 import { generateOtp, hashOtp, hashesMatch } from '../utils/secureCodes.js';
 import {
-  AppError, AuthenticationError, AuthorizationError, ConflictError, NotFoundError, RateLimitError, ValidationError
+  AppError, AuthenticationError, AuthorizationError, ConflictError, ExternalServiceError, NotFoundError,
+  RateLimitError, ValidationError
 } from '../utils/errors.js';
 
 /**
@@ -34,7 +36,16 @@ const emailRedirectUrl = () => process.env.EMAIL_REDIRECT_URL
 const authError = (error, fallback) => {
   const code = error?.code || '';
   const status = error?.status;
-  if (code === 'weak_password') return new ValidationError(error.message || 'Password is too weak');
+  if (code === 'weak_password') {
+    // Supabase Auth has its own password policy (Dashboard -> Auth -> Providers -> Email). Keep it the same as
+    // utils/validators.js passwordSchema; if it still asks for a symbol, say that plainly.
+    return new ValidationError(/[!@#$%^&*]/.test(error.message || '')
+      ? 'Choose a stronger password: add a symbol, for example ! or #.'
+      : 'Choose a stronger password.');
+  }
+  if (code === 'over_email_send_rate_limit') {
+    return new RateLimitError('We cannot send more confirmation emails right now. Please try again in an hour.');
+  }
   if (['user_already_exists', 'email_exists'].includes(code)) return new ConflictError('This email is already registered');
   if (code === 'email_not_confirmed') {
     return new AppError('Please confirm your email address first (check your inbox).', 403, 'EMAIL_NOT_CONFIRMED');
@@ -43,7 +54,100 @@ const authError = (error, fallback) => {
   if (code === 'email_address_invalid' || code === 'validation_failed') {
     return new ValidationError(error.message || 'Invalid email address');
   }
+  // 5xx = Supabase itself failed (e.g. "Error sending confirmation email": the SMTP settings in Dashboard ->
+  // Authentication -> Emails are wrong). Not the person's fault, so not a 401.
+  if (status >= 500) {
+    return new ExternalServiceError(/email/i.test(error.message || '')
+      ? 'We could not send the confirmation email. Please try again later.'
+      : 'The sign-in service is not available right now. Please try again later.', 'supabase-auth');
+  }
   return new AuthenticationError(fallback);
+};
+
+/**
+ * Projects/demos without an email (SMTP) setup: create accounts already confirmed, so sign-up does not
+ * depend on sending a confirmation email. Off by default and never in production.
+ *   AUTH_AUTO_CONFIRM_SIGNUPS=true
+ */
+const autoConfirmSignups = () => process.env.NODE_ENV !== 'production'
+  && (process.env.AUTH_AUTO_CONFIRM_SIGNUPS || 'false').toLowerCase() === 'true';
+
+// Shown only outside production: a hint for us, not for real customers.
+const SIGNUP_HINT = process.env.NODE_ENV === 'production'
+  ? 'Please try again later.'
+  : 'Set up email (SMTP) in Supabase, or for testing set AUTH_AUTO_CONFIRM_SIGNUPS=true in backend/.env.';
+
+/**
+ * Sign-up errors from Supabase Auth -> clear API errors. Before, every unknown error became
+ * 401 "Registration failed", which hid problems in the Supabase settings (email, sign-ups off, trigger).
+ * The real Supabase error is always logged (never the email address or password).
+ */
+const signUpError = (error) => {
+  const code = error?.code || '';
+  const status = error?.status;
+  const message = (error?.message || '').toLowerCase();
+  const devDetail = process.env.NODE_ENV !== 'production' && error?.message ? ` (Supabase: ${error.message})` : '';
+  logger.warn({
+    msg: 'Supabase sign-up failed',
+    supabaseCode: code || undefined,
+    supabaseStatus: status,
+    supabaseMessage: error?.message,
+    supabaseDetails: error?.details,
+    supabaseHint: error?.hint
+  });
+
+  // The checks the user can fix themselves keep their existing meaning (400 / 409 / 429).
+  if (code === 'weak_password' || ['user_already_exists', 'email_exists'].includes(code)
+      || code.startsWith('over_') || status === 429
+      || code === 'email_address_invalid' || code === 'validation_failed') {
+    return authError(error, 'Registration failed');
+  }
+  // Supabase's built-in email service only sends to members of the Supabase project team.
+  if (code === 'email_address_not_authorized') {
+    return new AppError(`We can't send a confirmation email to this address yet. ${SIGNUP_HINT}`, 503, 'SIGNUP_EMAIL_UNAVAILABLE');
+  }
+  if (code === 'signup_disabled' || code === 'email_provider_disabled') {
+    return new AppError('New sign-ups are switched off in Supabase (Authentication settings).', 503, 'SIGNUP_DISABLED');
+  }
+  if (message.includes('error sending') || message.includes('confirmation email')) {
+    return new AppError(`The confirmation email could not be sent. ${SIGNUP_HINT}`, 502, 'EMAIL_SEND_FAILED');
+  }
+  if (message.includes('database error saving new user')) {
+    return new AppError(
+      'The account could not be saved in the database (the sign-up trigger failed, e.g. the email is still in '
+      + 'public.users from an older account).',
+      500,
+      'PROFILE_CREATE_FAILED'
+    );
+  }
+  if (message.includes('invalid api key') || status === 401) {
+    return new AppError('The backend\'s Supabase key is not accepted (check SUPABASE_KEY in backend/.env).', 500, 'AUTH_CONFIG_ERROR');
+  }
+  return new AppError(`Registration failed${devDetail}`, 502, 'SIGNUP_FAILED');
+};
+
+/** Create the Supabase Auth user: a normal sign-up (confirmation email), or already confirmed (see above). */
+const createAuthUser = async (email, password, metadata) => {
+  if (autoConfirmSignups()) {
+    // Server-side only (service role). The database trigger sees email_confirmed_at and sets email_verified.
+    const { data, error } = await supabaseAdmin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: metadata
+    });
+    return { user: data?.user ?? null, error };
+  }
+  const redirectTo = emailRedirectUrl();
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: metadata,
+      ...(redirectTo ? { emailRedirectTo: redirectTo } : {})
+    }
+  });
+  return { user: data?.user ?? null, error };
 };
 
 /**
@@ -62,22 +166,16 @@ export const registerUser = async (email, password, userData) => {
     throw new ValidationError('Full name must be 2 to 150 characters');
   }
 
-  const redirectTo = emailRedirectUrl();
-  const { data, error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: { full_name: fullName, role: userData.role },
-      ...(redirectTo ? { emailRedirectTo: redirectTo } : {})
-    }
-  });
-  if (error) throw authError(error, 'Registration failed');
-  if (!data.user) throw new AuthenticationError('Registration failed');
+  // The Supabase error (code, status, message, details, hint) is logged by signUpError.
+  const { user, error } = await createAuthUser(email, password, { full_name: fullName, role: userData.role });
+  if (error) throw signUpError(error);
+  if (!user) throw signUpError({ message: 'Supabase returned no user' });
   // With email confirmation on, Supabase answers an already-registered email with a user that has no
   // identities (and sends nothing).
-  if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+  if (Array.isArray(user.identities) && user.identities.length === 0) {
     throw new ConflictError('This email is already registered');
   }
+  const data = { user };
 
   let profile;
   try {
@@ -212,9 +310,12 @@ export const verifyPhoneWithOtp = async (actor, otp) => {
     throw new ValidationError('Too many wrong codes. Request a new one.');
   }
 
+  // Use up a try BEFORE comparing (conditional on the count we read): of many guesses sent at the same moment
+  // only one gets this try, the others are refused, so parallel guessing cannot get around the 5 tries.
+  const reserved = await phoneOtpRepository.recordFailedAttempt(open.id, open.attempts);
+  if (!reserved) throw new ValidationError('Another check of this code is running. Try again in a moment.');
   if (!hashesMatch(open.code_hash, hashOtp(actor.id, open.phone_number, otp))) {
-    const updated = await phoneOtpRepository.recordFailedAttempt(open.id, open.attempts);
-    const attempts = updated?.attempts ?? open.attempts + 1;
+    const { attempts } = reserved;
     if (attempts >= PHONE_OTP_MAX_ATTEMPTS) await phoneOtpRepository.consumeCode(open.id);
     const left = PHONE_OTP_MAX_ATTEMPTS - attempts;
     throw new ValidationError(left > 0 ? `Wrong code. ${left} tries left.` : 'Wrong code. Request a new one.');

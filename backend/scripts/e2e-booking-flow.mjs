@@ -27,12 +27,13 @@ const check = (label, ok, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${extra !== '' ? `  (${extra})` : ''}`);
 };
 
-async function call(method, path, { token, body } = {}) {
+async function call(method, path, { token, body, headers = {} } = {}) {
   const res = await fetch(path.startsWith('http') ? path : `${BASE}${path}`, {
     method,
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...headers
     },
     body: body ? JSON.stringify(body) : undefined
   });
@@ -163,7 +164,32 @@ try {
   r = await call('POST', `/bookings/${id1}/accept`, { token: providerUser.token });
   check('cannot accept before the fee is paid -> 409', r.status === 409, r.json?.message);
 
-  r = await call('POST', '/payments/intent', { token: customer.token, body: { bookingId: id1, purpose: 'booking_fee' } });
+  // ---- never charged twice: Idempotency-Key, open payment reuse, simultaneous requests --------------
+  const key = `e2e-${stamp}-fee`;
+  const intent = (headers = {}) => call('POST', '/payments/intent', {
+    token: customer.token, body: { bookingId: id1, purpose: 'booking_fee' }, headers
+  });
+  const firstTap = await intent({ 'Idempotency-Key': key });
+  const secondTap = await intent({ 'Idempotency-Key': key });
+  check('double tap (same Idempotency-Key): the same payment, second answer is not a new one',
+    firstTap.status === 201 && secondTap.status === 200 && firstTap.data?.paymentId === secondTap.data?.paymentId,
+    `${firstTap.status}/${secondTap.status} ${firstTap.json?.message || ''}`);
+  const [raceA, raceB] = await Promise.all([intent({ 'Idempotency-Key': `${key}-a` }), intent({ 'Idempotency-Key': `${key}-b` })]);
+  check('two requests at the same moment (new keys): still that one open payment',
+    raceA.data?.paymentId === firstTap.data?.paymentId && raceB.data?.paymentId === firstTap.data?.paymentId);
+  const { count: openFees } = await db.from('payments').select('id', { count: 'exact', head: true })
+    .eq('booking_id', id1).eq('purpose', 'booking_fee');
+  check('one payment row for the booking fee in the database', openFees === 1, openFees);
+  const again = await call('POST', '/bookings', {
+    token: customer.token,
+    body: {
+      providerId, serviceId: fixed.id, scheduledStart: inTwoDays(0), address: '12 Main Rd, Pretoria', latitude: -25.75, longitude: 28.19
+    }
+  });
+  check('the same booking request sent again returns the first booking (no second booking fee)',
+    again.data?.id === id1 && again.data?.reused === true, `${again.status} ${again.data?.id}`);
+
+  r = await intent({ 'Idempotency-Key': key });
   if (r.status === 200 || r.status === 201) {
     check('fee checkout: R67.50, sandbox, signed link', r.data.amount === 67.5 && r.data.sandbox === true
       && /\/payments\/.+\/checkout\?e=\d+&t=[0-9a-f]{64}$/.test(r.data.checkoutUrl));
@@ -183,19 +209,26 @@ try {
       `${r.status} ${r.json?.message}`
     );
   }
-  // SIMULATED ITN: what processPayFastItn does after PayFast confirms the fee.
-  const { data: existingFee } = await db.from('payments').select('id').eq('booking_id', id1).eq('purpose', 'booking_fee')
-    .maybeSingle();
-  const feePayment = {
-    payment_status: 'paid', gateway_provider: 'payfast', transaction_reference: `SIM-${stamp}`, paid_at: new Date().toISOString()
-  };
-  if (existingFee) await db.from('payments').update(feePayment).eq('id', existingFee.id);
-  else {
-    await db.from('payments').insert({
-      booking_id: id1, amount: 67.5, currency: 'ZAR', purpose: 'booking_fee', method: 'card', ...feePayment
-    });
-  }
-  await db.from('bookings').update({ booking_fee_status: 'paid' }).eq('id', id1);
+  // SIMULATED ITN: the same database transaction a verified PayFast ITN runs (apply_payfast_payment), twice at
+  // the same moment, plus a wrong amount. (Only PayFast can send a real, signed ITN.)
+  const { data: feeRow } = await db.from('payments').select('id').eq('booking_id', id1).eq('purpose', 'booking_fee')
+    .single();
+  const wrongAmount = await db.rpc('apply_payfast_payment', {
+    p_payment_id: feeRow.id, p_pf_payment_id: `SIM-${stamp}`, p_amount: 1, p_raw: {}
+  });
+  check('ITN with the wrong amount is refused by the transaction', wrongAmount.data?.outcome === 'amount_mismatch', JSON.stringify(wrongAmount.data || wrongAmount.error));
+  const [itnA, itnB] = await Promise.all([1, 2].map(() => db.rpc('apply_payfast_payment', {
+    p_payment_id: feeRow.id, p_pf_payment_id: `SIM-${stamp}`, p_amount: 67.5, p_raw: { simulated: true }
+  })));
+  check('the same ITN twice at the same moment: applied once, ignored once',
+    [itnA.data?.outcome, itnB.data?.outcome].sort().join(',') === 'already_processed,paid',
+    `${itnA.data?.outcome}/${itnB.data?.outcome} ${itnA.error?.message || ''}`);
+  const { count: feeReceipts } = await db.from('receipts').select('id', { count: 'exact', head: true }).eq('payment_id', feeRow.id);
+  const { data: feeBooking } = await db.from('bookings').select('booking_fee_status').eq('id', id1).single();
+  check('one receipt, booking fee paid', feeReceipts === 1 && feeBooking.booking_fee_status === 'paid', `${feeReceipts} ${feeBooking.booking_fee_status}`);
+  const paidAgain = await intent({ 'Idempotency-Key': `${key}-late` });
+  check('"start payment" after it was paid: told it is paid, no new checkout',
+    paidAgain.data?.alreadyPaid === true && paidAgain.data?.checkoutUrl === null && paidAgain.data?.paymentId === feeRow.id);
 
   r = await call('POST', `/bookings/${id1}/accept`, { token: providerUser.token });
   check('cannot accept without bank details -> 409', r.status === 409 && /bank details/.test(r.json?.message || ''), r.json?.message);

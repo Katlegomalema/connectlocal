@@ -9,6 +9,8 @@ const repository = {
   getCustomerById: jest.fn(),
   hasBookingConflict: jest.fn(),
   getProviderAvailability: jest.fn(),
+  findPendingDuplicate: jest.fn(),
+  hasFirmConflict: jest.fn(),
   createBooking: jest.fn(),
   getBookingById: jest.fn(),
   getProviderByUserId: jest.fn(),
@@ -25,6 +27,7 @@ const payoutService = { hasPayoutDetails: jest.fn() };
 jest.unstable_mockModule('../../src/services/paymentService.js', () => paymentService);
 jest.unstable_mockModule('../../src/services/payoutService.js', () => payoutService);
 jest.unstable_mockModule('../../src/services/bookingNotifier.js', () => ({ notifyBookingEvent: jest.fn(async () => {}) }));
+const { ConflictError } = await import('../../src/utils/errors.js');
 const bookingService = await import('../../src/services/bookingService.js');
 const { deriveArrivalPin, hashArrivalPin } = await import('../../src/utils/secureCodes.js');
 
@@ -60,6 +63,8 @@ describe('Booking service', () => {
     repository.getProviderByUserId.mockResolvedValue(verifiedProvider);
     repository.hasBookingConflict.mockResolvedValue(false);
     repository.getProviderAvailability.mockResolvedValue(allWeek);
+    repository.findPendingDuplicate.mockResolvedValue(null);
+    repository.hasFirmConflict.mockResolvedValue(false);
     repository.createBooking.mockImplementation(async (booking) => ({ id: 'booking-1', ...booking }));
     repository.updateBooking.mockImplementation(async (id, statuses, updates) => ({ id, ...updates }));
     payoutService.hasPayoutDetails.mockResolvedValue(true);
@@ -133,6 +138,19 @@ describe('Booking service', () => {
       address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
     })).rejects.toThrow('no longer available');
     expect(repository.createBooking).not.toHaveBeenCalled();
+  });
+
+  test('the same request sent twice (retry / double tap) returns the first booking, not a second one', async () => {
+    givenService();
+    repository.findPendingDuplicate.mockResolvedValue({ id: 'booking-1', status: 'pending', customer_id: 'customer-1' });
+    const booking = await bookingService.createBooking(customer, {
+      address: '12 Main Rd, Pretoria', providerId: 'provider-1', serviceId: 'service-1', scheduledStart: inOneDay()
+    });
+    expect(booking).toMatchObject({ id: 'booking-1', reused: true });
+    expect(repository.createBooking).not.toHaveBeenCalled();
+    expect(repository.findPendingDuplicate).toHaveBeenCalledWith(expect.objectContaining({
+      customerId: 'customer-1', providerId: 'provider-1', serviceId: 'service-1'
+    }));
   });
 
   test('the slot check keeps 30 minutes free before and after the booking', async () => {
@@ -211,28 +229,38 @@ describe('Booking service', () => {
 
   // ---------------- accept / PIN ----------------
   test('provider cannot accept before the booking fee is paid', async () => {
-    repository.getBookingById.mockResolvedValue({ id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'pending' });
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'pending'
+    });
     await expect(bookingService.acceptBooking(providerUser, 'booking-1')).rejects.toThrow('not paid the booking fee');
   });
 
   test('provider cannot accept without bank details (payout needs somewhere to go)', async () => {
-    repository.getBookingById.mockResolvedValue({ id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid' });
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid'
+    });
     payoutService.hasPayoutDetails.mockResolvedValue(false);
     await expect(bookingService.acceptBooking(providerUser, 'booking-1')).rejects.toThrow('bank details');
     expect(repository.updateBooking).not.toHaveBeenCalled();
   });
 
   test('customer can choose cash for the balance only after completion (saved on the server)', async () => {
-    repository.getBookingById.mockResolvedValue({ id: 'booking-1', customer_id: 'customer-1', status: 'accepted', balance_status: 'pending' });
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', customer_id: 'customer-1', status: 'accepted', balance_status: 'pending'
+    });
     await expect(bookingService.chooseCashBalance(customer, 'booking-1')).rejects.toThrow('after the job is completed');
-    repository.getBookingById.mockResolvedValue({ id: 'booking-1', customer_id: 'customer-1', status: 'completed', balance_status: 'pending' });
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', customer_id: 'customer-1', status: 'completed', balance_status: 'pending'
+    });
     const booking = await bookingService.chooseCashBalance(customer, 'booking-1');
     expect(repository.updateBooking).toHaveBeenCalledWith('booking-1', ['completed'], { balance_payment_method: 'cash' }, { balance_status: 'pending' });
     expect(booking.balance_payment_method).toBe('cash');
   });
 
   test('accepting stores only the PIN hash and never returns it', async () => {
-    repository.getBookingById.mockResolvedValue({ id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid' });
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid'
+    });
     const booking = await bookingService.acceptBooking(providerUser, 'booking-1');
 
     const updates = repository.updateBooking.mock.calls[0][2];
@@ -259,10 +287,51 @@ describe('Booking service', () => {
       id: 'booking-1', provider_id: 'provider-1', status: 'accepted', arrival_pin_attempts: 0, arrival_pin_hash: hashArrivalPin('booking-1', pin)
     });
     const booking = await bookingService.startBooking(providerUser, 'booking-1', pin);
-    expect(repository.updateBooking).toHaveBeenCalledWith('booking-1', ['accepted'], expect.objectContaining({
+    // A try is used up first (so parallel guesses cannot share one try), then the job starts.
+    expect(repository.updateBooking).toHaveBeenNthCalledWith(
+      1,
+      'booking-1',
+      ['accepted'],
+      { arrival_pin_attempts: 1 },
+      { arrival_pin_attempts: 0 }
+    );
+    expect(repository.updateBooking).toHaveBeenNthCalledWith(2, 'booking-1', ['accepted'], expect.objectContaining({
       status: 'in_progress', arrival_pin_verified_at: expect.any(String)
-    }), { arrival_pin_attempts: 0 });
+    }), { arrival_pin_attempts: 1 });
     expect(booking.status).toBe('in_progress');
+  });
+
+  test('many PIN guesses at the same moment: only one gets the try, the rest are refused', async () => {
+    const pin = deriveArrivalPin('booking-1');
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', provider_id: 'provider-1', status: 'accepted', arrival_pin_attempts: 0, arrival_pin_hash: hashArrivalPin('booking-1', pin)
+    });
+    let reserved = false;
+    repository.updateBooking.mockImplementation(async (id, statuses, updates, expected) => {
+      if (expected.arrival_pin_attempts === 0 && updates.arrival_pin_attempts === 1) {
+        if (reserved) throw new ConflictError('Booking status changed; reload and try again');
+        reserved = true;
+      }
+      return { id, ...updates };
+    });
+    const guesses = Array.from({ length: 20 }, (_, i) => String(1000 + i).padStart(4, '0')).filter((g) => g !== pin);
+    const results = await Promise.allSettled(guesses.map((g) => bookingService.startBooking(providerUser, 'booking-1', g)));
+    const messages = results.map((r) => r.reason?.message || '');
+    expect(messages.filter((m) => m.startsWith('Wrong PIN'))).toHaveLength(1);
+    expect(messages.filter((m) => m.includes('Another PIN check is running'))).toHaveLength(guesses.length - 1);
+  });
+
+  test('accepting is refused when another booking is already accepted at that time', async () => {
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1',
+      provider_id: 'provider-1',
+      status: 'pending',
+      booking_fee_status: 'paid',
+      scheduled_start: '2030-01-02T08:00:00Z',
+      scheduled_end: '2030-01-02T09:00:00Z'
+    });
+    repository.hasFirmConflict.mockResolvedValue(true);
+    await expect(bookingService.acceptBooking(providerUser, 'booking-1')).rejects.toThrow('already have an accepted booking');
   });
 
   test('wrong PIN counts an attempt and does not start the job', async () => {
@@ -290,7 +359,9 @@ describe('Booking service', () => {
 
   // ---------------- decline / cancel refunds ----------------
   test('provider decline refunds the fee', async () => {
-    const booking = { id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid' };
+    const booking = {
+      id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid'
+    };
     repository.getBookingById.mockResolvedValue(booking);
     paymentService.refundBookingFee.mockResolvedValue(true);
     const result = await bookingService.declineBooking(providerUser, 'booking-1', 'Fully booked');
@@ -299,7 +370,9 @@ describe('Booking service', () => {
   });
 
   test('a failed refund does not undo the decline (admin follow-up)', async () => {
-    repository.getBookingById.mockResolvedValue({ id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid' });
+    repository.getBookingById.mockResolvedValue({
+      id: 'booking-1', provider_id: 'provider-1', status: 'pending', booking_fee_status: 'paid'
+    });
     paymentService.refundBookingFee.mockRejectedValue(new Error('PayFast down'));
     const result = await bookingService.declineBooking(providerUser, 'booking-1');
     expect(result).toMatchObject({ status: 'rejected', feeRefund: 'failed' });
@@ -338,8 +411,12 @@ describe('Booking service', () => {
 
   test('the provider sees the customer phone number only once the booking is accepted', () => {
     const row = {
-      id: 'b1', customer_id: 'customer-1', status: 'pending', customer: { full_name: 'Pat', phone_number: '+27821234567' },
-      service_location: '0101000020E61000009B3AF4CA5A313C40046C4BE11DBF39C0', arrival_pin_hash: 'x'
+      id: 'b1',
+      customer_id: 'customer-1',
+      status: 'pending',
+      customer: { full_name: 'Pat', phone_number: '+27821234567' },
+      service_location: '0101000020E61000009B3AF4CA5A313C40046C4BE11DBF39C0',
+      arrival_pin_hash: 'x'
     };
     expect(bookingService.publicBooking(row, providerUser).customer.phone_number).toBeNull();
     expect(bookingService.publicBooking({ ...row, status: 'accepted' }, providerUser).customer.phone_number).toBe('+27821234567');

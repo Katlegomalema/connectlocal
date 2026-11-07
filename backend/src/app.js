@@ -26,6 +26,9 @@ import uploadRoutes from './routes/uploads.js';
 import geoRoutes from './routes/geo.js';
 
 const app = express();
+// One proxy in front of us (Codespaces port forwarding / a hosting load balancer): req.ip is then the real
+// caller, which the rate limits count per person instead of putting everyone in one bucket.
+app.set('trust proxy', 1);
 
 // Middleware: Logging
 // Short request logs: method, path (no query string, it can carry tokens), status, time.
