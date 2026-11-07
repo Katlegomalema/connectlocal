@@ -4,7 +4,9 @@ Thank you for contributing to ConnectLocal. This document defines the standards 
 
 ## 1. Branch Naming Convention
 
-All branches must be created from `develop` (except hotfixes, from `main`) and follow this pattern:
+The team's integration branch is `delevop` (the spelling is historical; keep it). `main` only receives tested work
+through a pull request from `delevop`. All branches must be created from `delevop` (except hotfixes, from `main`)
+and follow this pattern:
 
 ```
 <type>/<ticket-id>-<short-description>
@@ -43,9 +45,10 @@ test(payment): add unit tests for PayFast signature validation
 
 ## 3. Pull Request Process
 
-1. Ensure your branch is up to date with `develop` (`git pull --rebase origin develop`).
-2. Ensure all CI checks (lint, unit tests, build) pass locally before pushing.
-3. Open a PR against `develop` using the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md).
+1. Ensure your branch is up to date with `delevop` (`git pull --rebase origin delevop`).
+2. Ensure the checks pass locally before pushing: `npm run lint && npm test` in `backend/`, `flutter analyze && flutter test`
+   in `frontend/connect-local/` (CI runs the same, plus both web builds).
+3. Open a PR against `delevop` using the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md).
 4. Fill in **Description, Changes Made, Testing Done, Screenshots (if UI), and Checklist** in full — incomplete PRs will be returned without review.
 5. Link the related issue using `Closes #<issue-number>`.
 6. Request review from at least **one** other contributor (two for changes touching authentication, payments, or database migrations).
@@ -109,7 +112,7 @@ All issues must use one of the templates in `.github/ISSUE_TEMPLATE/` (Bug Repor
 ## 7. Definition of Done
 
 A task is only marked **Done** when:
-- Code is merged to `develop` via an approved PR.
+- Code is merged to `delevop` via an approved PR.
 - Automated tests pass in CI.
 - Relevant documentation is updated.
 - Acceptance criteria on the linked issue are verified.

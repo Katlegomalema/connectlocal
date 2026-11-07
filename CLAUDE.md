@@ -5,7 +5,7 @@ providers; an admin verifies businesses. Goal right now: **get the app working e
 Flutter app → Express backend API → Supabase Postgres.
 
 ## Repo layout
-- `backend/`: Node 18+/20, Express, ES modules (`"type": "module"`), `@supabase/supabase-js`, zod, jest.
+- `backend/`: Node 22+ (supabase-js needs it), Express, ES modules (`"type": "module"`), `@supabase/supabase-js`, zod, jest.
   - `server.js` → `src/app.js` mounts routes at `/api/v1/{auth,users,providers,search,bookings,messages,reviews,payments,admin,notifications}` + `/health`.
   - Layers: `routes/` → `services/` → `repositories/` (all DB access) → `config/supabase.js`.
   - Repositories use `supabaseAdmin` (service-role key, **bypasses RLS**). So the backend itself must

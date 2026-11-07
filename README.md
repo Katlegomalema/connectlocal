@@ -1,244 +1,130 @@
 # ConnectLocal
 
-**A location-based service marketplace connecting customers with trusted local service providers.**
+**A South African marketplace that connects customers with verified local service providers.**
 
-[![Backend CI](https://github.com/connectlocal/connectlocal/actions/workflows/backend-ci.yml/badge.svg)](.github/workflows/backend-ci.yml)
-[![Frontend CI](https://github.com/connectlocal/connectlocal/actions/workflows/frontend-ci.yml/badge.svg)](.github/workflows/frontend-ci.yml)
+[![Backend CI](https://github.com/Katlegomalema/connectlocal/actions/workflows/backend-ci.yml/badge.svg)](https://github.com/Katlegomalema/connectlocal/actions/workflows/backend-ci.yml)
+[![Frontend CI](https://github.com/Katlegomalema/connectlocal/actions/workflows/frontend-ci.yml/badge.svg)](https://github.com/Katlegomalema/connectlocal/actions/workflows/frontend-ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> Final-Year BSc Information Technology Software Engineering Project
+> Final-year BSc Information Technology (Software Engineering) project.
+
+Customers find a nearby plumber, hairdresser, tutor or mechanic, book a time slot and pay a booking fee by card.
+Providers apply with their company registration and documents, an admin verifies them, and they get paid
+automatically after each job.
 
 ---
 
-## 1. Project Overview
+## Features
 
-ConnectLocal is a mobile and web platform that connects customers with nearby, verified local service providers such as plumbers, electricians, tutors, hairdressers, mechanics, and cleaning services. The platform addresses the widespread problem of discovering, vetting, booking, and paying trusted local service providers by combining geolocation search, in-app booking, secure messaging, reviews, and integrated payments in a single ecosystem.
+**Customers**
+- Sign up with "I need a service"; email confirmation and a 6-digit phone code before the first booking
+- Search by name or category, see providers on a map with distance, photos, services, prices and reviews
+- Book a time slot: visit the business or a house call (address search and "use my location")
+- Pay a 15% booking fee by card (PayFast); it counts toward the price and is refunded if the provider declines
+- A 4-digit PIN is shown after the provider accepts; the provider enters it on arrival to start the job
+- Pay the balance by card or cash, then leave a review; chat with the provider; in-app notifications
 
-The system is composed of a Flutter cross-platform client, a Node.js/Express REST API backend, and a PostgreSQL database managed through Supabase. The client renders maps with Flutter map tooling; the backend stores coordinates and runs nearby search with PostGIS. PayFast handles local payment processing.
+**Providers**
+- Sign up with "I offer a service", then apply: CIPC registration number (`YYYY/NNNNNN/TT`), ID and company
+  documents, business photos and address
+- Services priced per hour, as a fixed price or as packages, with photos
+- Working hours and slot length (30 minutes to 8 hours); 30 minutes kept free between bookings
+- Accept or decline requests, start with the customer's PIN, complete the job
+- Bank details stored encrypted (only the last 4 digits are ever shown); automatic payouts minus a 10% commission
 
-This repository contains the full software engineering documentation set (requirements, architecture, database design, API specifications, project management artifacts, testing strategy, and deployment guides) alongside the application source code scaffolding, produced to a standard suitable for academic assessment and industry review.
+**Admin website** (separate app)
+- Verify or reject provider applications (documents shown securely)
+- Users, bookings, payments, payouts, reported reviews and disputes; analytics
 
-## 2. Features
-
-### Customer Features
-- Sign-up as "I need a service" (customer) or "I offer a service" (provider); email login
-- Email and phone verification (6-digit code, no paid SMS) before booking
-- Nearby provider search and map markers using client-rendered Flutter maps and PostGIS
-- Provider profile and service browsing
-- Booking a time slot (visit the business or house call), rescheduling and cancellation
-- 15% booking fee by card (counts toward the price), arrival PIN, balance by card or cash
-- In-app real-time messaging with providers
-- Ratings and reviews
-- Push and in-app notifications
-- Secure payments via PayFast
-
-### Provider Features
-- Business application (registration number + documents) approved by the admin
-- Bank details (stored encrypted) and automatic payouts (10% ConnectLocal commission)
-- Services priced per hour, fixed, or as packages
-- Working hours and slot length (30 min to 8 hours)
-- Booking acceptance/rejection workflow
-- Customer messaging
-- Payment receipt and payout tracking
-- Review visibility and response
-
-### Administrator Features
-- User and provider account management
-- Provider verification/approval workflow
-- Review moderation
-- Dispute resolution
-- Platform analytics dashboard
-- System configuration management
-
-## 3. Architecture Overview
-
-ConnectLocal follows a **layered, service-oriented architecture** with a mobile-first client, a stateless REST API layer, and a managed relational database with row-level security.
+## How it fits together
 
 ```mermaid
 flowchart LR
-    subgraph Client["Client Layer"]
-        A[Flutter Mobile App]
-        B[Flutter Web App]
-    end
-
-    subgraph Edge["API Gateway / Edge"]
-        C[Express REST API]
-    end
-
-    subgraph Services["Application Services"]
-        D[Auth Service]
-        E[Booking Service]
-        F[Messaging Service]
-        G[Review Service]
-        H[Payment Service]
-        I[Notification Service]
-    end
-
-    subgraph Data["Data Layer"]
-        J[(PostgreSQL - Supabase)]
-        K[Supabase Auth]
-        L[Supabase Storage]
-    end
-
-    subgraph External["External Services"]
-        M[PayFast Gateway]
-        N[Push Notification Provider]
-    end
-
-    A --> C
-    B --> C
-    C --> D & E & F & G & H & I
-    D --> K
-    E --> J
-    F --> J
-    G --> J
-    H --> M
-    H --> J
-    I --> N
+    A["Flutter app<br/>customers + providers<br/>(web, Android)"] -->|HTTPS + JSON| C
+    B["Flutter admin website"] -->|HTTPS + JSON| C
+    C["Express API<br/>backend/"] --> D[("Supabase Postgres<br/>+ PostGIS, RLS")]
+    C --> E["Supabase Auth"]
+    C --> F["Supabase Storage<br/>documents, photos"]
+    C <-->|checkout + ITN| G["PayFast"]
+    C --> H["Nominatim<br/>address search"]
+    A --> I["MapTiler / Esri<br/>map tiles"]
 ```
 
-See [`docs/architecture/System-Architecture.md`](docs/architecture/System-Architecture.md) for the full architectural specification.
+- The apps only talk to the API (no database keys in the app). Files are uploaded straight to Storage with
+  one-time signed URLs.
+- The API uses Supabase's service-role key, so it checks ownership and roles itself on every route; Row Level
+  Security is on for every table as a second line of defence.
+- Times are South African time (SAST). PayFast runs in sandbox mode while testing; a payment can never be charged
+  twice (idempotency keys and a single database transaction per PayFast notification).
 
-## 4. Tech Stack
+## Tech stack
 
-| Layer | Technology | Justification |
-|---|---|---|
-| Frontend (Mobile & Web) | Flutter (Dart) | Single codebase for iOS, Android, and Web; strong performance; rich widget ecosystem |
-| Backend | Node.js + Express | Non-blocking I/O suited to high-concurrency booking/messaging workloads; large ecosystem |
-| Database | PostgreSQL (via Supabase) | ACID-compliant relational integrity for bookings/payments; native PostGIS support for geolocation |
-| Authentication | Supabase Auth | Built-in email/phone/OAuth flows with JWT issuance, reducing custom auth surface area |
-| Maps & Geolocation | Flutter map renderer + PostGIS | Map tiles are rendered client-side; provider coordinates and radius search stay in the API/database |
-| Payments | PayFast | Leading South African payment gateway supporting card, EFT, and instant EFT |
-| Hosting | Supabase (DB/Auth/Storage), Netlify (web builds), API in Codespaces for the demo | Managed infrastructure reduces DevOps overhead for a small team |
-| CI/CD | GitHub Actions | Native integration with repository, free tier sufficient for project scale |
+| Part | Technology |
+|---|---|
+| App + admin website | Flutter (Dart), `flutter_map` |
+| API | Node.js 22+, Express, zod, pino |
+| Database, auth, files | Supabase (PostgreSQL + PostGIS, Auth, Storage) |
+| Payments | PayFast (sandbox while testing) |
+| Maps | MapTiler (free key) or Esri street map; Nominatim for address search |
+| CI | GitHub Actions: lint, tests, both web builds |
 
-## 5. Folder Structure
+## Repository layout
 
 ```
-connectlocal/
-├── backend/                   # Node.js/Express API (ES modules)
-│   ├── server.js              #   starts src/app.js
-│   ├── src/
-│   │   ├── routes/            #   /api/v1/{auth,users,providers,search,bookings,messages,reviews,payments,admin,notifications,uploads,geo}
-│   │   ├── services/          #   business rules (who may do what, booking flow, payments)
-│   │   ├── repositories/      #   all database access (Supabase service role)
-│   │   ├── middleware/        #   auth (token + role), validation, rate limits, errors
-│   │   ├── integrations/      #   PayFast, Storage, payouts, maps
-│   │   └── utils/             #   validators.js (same rules as the app), schedule.js (time slots)
-│   ├── tests/                 #   jest unit + integration tests
-│   └── scripts/               #   smoke-test.sh, e2e-booking-flow.mjs, db-push.mjs, codespace-port-public.sh
-├── frontend/connect-local/    # Flutter app
-│   ├── lib/main.dart          #   customer + provider app
-│   ├── lib/main_admin.dart    #   separate admin web app
-│   ├── lib/core/              #   api_client.dart, connect_local_repository.dart (every endpoint)
-│   └── test/                  #   widget + unit tests
-├── supabase/migrations/       # the database schema, applied in order with `npm run db:push`
-├── docs/                      # requirements, architecture, API specs, project management, proposals
-├── diagrams/                  # ERD, use-case, sequence, activity, architecture (Mermaid)
-├── assets/                    # branding, wireframes (wire.pdf), mockups
-├── SETUP.md                   # how to run, test and deploy (step by step)
-├── TEST_REPORT.md             # latest full check: what passed, what failed, what is still open
-└── CLAUDE.md                  # project rules and context for the AI assistant
+backend/                   Express API: routes -> services -> repositories       (backend/README.md)
+frontend/connect-local/    Flutter app (lib/main.dart) and admin site (lib/main_admin.dart)
+supabase/migrations/       database schema, applied in order with `npm run db:push`
+docs/                      requirements, architecture, API specs, project management, proposals
+diagrams/                  ERD, use cases, sequence and activity diagrams (Mermaid)
+assets/                    branding, wireframes, mockups
+START.md                   copy-paste commands to start everything
+SETUP.md                   full setup: Codespaces, Android Studio, Netlify, PayFast, email, maps
+TEST_REPORT.md             latest full check: what passed, what is still open
 ```
 
-## 6. Getting Started
+## Getting started
 
-Full step-by-step instructions (Codespaces, Android Studio, Netlify, PayFast sandbox, emails) are in
-**[SETUP.md](SETUP.md)**. The short version:
-
-### Prerequisites
-- Node.js 20 and npm
-- Flutter SDK (stable)
-- A Supabase project (PostgreSQL with PostGIS, Auth, Storage)
-- PayFast **sandbox** merchant details
-- In GitHub Codespaces (IPv4 only), database connections must use the Supabase **Session pooler**
-  (`postgres.<ref>@aws-0-<region>.pooler.supabase.com:5432`), not `db.<ref>.supabase.co`
-
-### Run it
+**Quick start in GitHub Codespaces:** follow [START.md](START.md). First-time setup (Supabase project, `.env`,
+admin account, PayFast sandbox, email, maps key): [SETUP.md](SETUP.md).
 
 ```bash
-# Backend
+# Backend (Node 22+)
 cd backend
 npm install
-cp .env.example .env     # fill in the values; .env is git-ignored and must never be committed
-npm run db:push          # apply supabase/migrations (shows what it will run first)
-npm start                # http://localhost:3000, check /health/db
+cp .env.example .env       # fill in; .env is git-ignored and must never be committed
+npm run db:push            # apply the database migrations
+npm start                  # http://localhost:3000/health/db
 
-# Flutter app (customer + provider) and the admin web app
+# App and admin website (Flutter)
 cd ../frontend/connect-local
 flutter pub get
 flutter run -d chrome --dart-define=API_BASE_URL=http://localhost:3000
 flutter run -d chrome -t lib/main_admin.dart --dart-define=API_BASE_URL=http://localhost:3000
 ```
 
-Without `--dart-define=API_BASE_URL=...` the app shows a "not connected" page: all data comes from the API,
-and only the sign-in tokens are kept on the device.
+Secrets (Supabase service-role key, PayFast merchant key and passphrase, bank-details encryption key) live only in
+`backend/.env`. The app only needs `API_BASE_URL` and, optionally, `MAPTILER_KEY` (a public browser key).
 
-### Environment variables (backend/.env)
-
-All names are listed in [`backend/.env.example`](backend/.env.example). The main ones:
-
-| Name | What it is |
-|---|---|
-| `SUPABASE_URL`, `SUPABASE_KEY` | Supabase project URL and anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | server only, bypasses RLS: never in the app, never committed |
-| `DATABASE_URL` | Session pooler connection string (used by `npm run db:push`) |
-| `PAYFAST_MERCHANT_ID`, `PAYFAST_MERCHANT_KEY`, `PAYFAST_PASSPHRASE`, `PAYFAST_MODE=sandbox` | PayFast (server only) |
-| `PUBLIC_API_URL` | public HTTPS address of the API (PayFast return/notify links) |
-| `FRONTEND_URL`, `ADMIN_URL`, `CORS_ORIGINS` | the web app addresses allowed to call the API |
-| `PAYOUT_ENCRYPTION_KEY` | encrypts provider bank account numbers |
-| `CODE_HASH_SECRET` | hashes phone codes and arrival PINs |
-
-The Flutter app needs only `API_BASE_URL` (a build setting, not a secret).
-
-### Tests
+## Testing
 
 ```bash
-cd backend && npm run lint && npm test                   # unit + integration tests
-API=http://localhost:3000 bash scripts/smoke-test.sh     # main flow with curl against a running API
+cd backend && npm run lint && npm test                 # unit + integration tests
+bash scripts/smoke-test.sh                             # whole booking flow with curl against a running API
 cd ../frontend/connect-local && flutter analyze && flutter test
 ```
 
-See [TEST_REPORT.md](TEST_REPORT.md) for the latest results.
+Latest results: [TEST_REPORT.md](TEST_REPORT.md).
 
-## 7. Contribution Guide
-
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) for branch naming, commit conventions, the pull request process, and coding standards before contributing.
-
-### Branch Strategy
-
-ConnectLocal uses a **GitHub Flow with release branches** model:
+## Team and branches
 
 | Branch | Purpose |
 |---|---|
-| `main` | Production-ready, always deployable |
-| `fix/round-2`, `delevop` | Current integration branches (Nov 2026) |
-| `feature/*` | New features, branched from `develop` |
-| `bugfix/*` | Non-critical fixes, branched from `develop` |
-| `hotfix/*` | Urgent production fixes, branched from `main` |
-| `release/*` | Release stabilization branches |
+| `main` | Tested, demo-ready code. Changes arrive only through a pull request from `delevop`. |
+| `delevop` | Integration branch: everyone's work is merged here first. |
+| `feature/...`, `bugfix/...` | Short-lived branches from `delevop` (see [CONTRIBUTING.md](CONTRIBUTING.md)). |
 
-## 8. Roadmap
+Backend and integration: Katlego Malema. Flutter screens: Shuan, radzivhonikharendwe.
 
-| Milestone | Target | Scope |
-|---|---|---|
-| M1 — Foundations | Sprint 1–2 | Database schema, authentication, project setup |
-| M2 — Core Marketplace | Sprint 3–4 | Provider profiles, search, service listings |
-| M3 — Transactions | Sprint 5–6 | Bookings, messaging, notifications |
-| M4 — Trust & Payments | Sprint 7–8 | Reviews, payments, admin dashboard |
-| M5 — Hardening | Sprint 9–10 | Testing, performance, security audit |
-| M6 — Release | Sprint 11 | Deployment, UAT, final report |
+## License
 
-## 9. Team Structure
-
-| Role | Responsibility |
-|---|---|
-| Project Lead / Backend Developer | Architecture, API development, database design |
-| Frontend Developer | Flutter application development |
-| QA / Test Engineer | Test strategy, test case authoring, execution |
-| UI/UX Designer | Wireframes, mockups, branding |
-| Academic Supervisor | Project oversight and assessment |
-
-## 10. License
-
-This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
+MIT, see [LICENSE](LICENSE).

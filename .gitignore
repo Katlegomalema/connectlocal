@@ -52,3 +52,6 @@ database/backups/
 
 # MapTiler browser key (read by frontend/connect-local/tool/run_web_codespace.sh)
 frontend/connect-local/.maptiler-key
+
+# Supabase CLI local state
+supabase/.temp/

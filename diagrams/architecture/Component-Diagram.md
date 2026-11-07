@@ -7,7 +7,7 @@ Illustrates the deployable/logical components of ConnectLocal and their dependen
 To show component-level boundaries and interfaces, useful for onboarding new developers and for identifying candidate seams for future service extraction.
 
 ## 3. Scope
-Covers backend service components and their direct dependencies on data stores and external systems. Frontend component breakdown is documented in the Flutter app's internal folder structure (see `frontend/README.md`).
+Covers backend service components and their direct dependencies on data stores and external systems. Frontend component breakdown is documented in the Flutter app's internal folder structure (see `frontend/connect-local/README.md`).
 
 ## 4. Diagram
 

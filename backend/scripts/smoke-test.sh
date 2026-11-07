@@ -129,9 +129,15 @@ CODE=$(echo "$BODY" | jq -r '.data.devCode // empty')
 call POST /auth/phone/verify-otp "$CUSTOMER" "{\"otp\":\"$CODE\"}"; expect "phone verified with the demo code" 200
 
 step "Provider applies; admin approves"
-REG="20$((STAMP % 90 + 10))/$(printf '%06d' $((STAMP % 1000000)))/07"
+# Registration year must not be in the future: a year between 2000 and 2025.
+REG="$((2000 + STAMP % 26))/$(printf '%06d' $((STAMP % 1000000)))/07"
 call POST /providers "$PROVIDER" "{\"businessName\":\"Smoke Plumbing $STAMP\",\"registrationNumber\":\"$REG\",\"category\":\"Plumbing\",\"description\":\"Leaks and geysers.\",\"streetAddress\":\"12 Church Street, Pretoria\",\"location\":{\"lat\":-25.7461,\"lng\":28.1881}}"
 expect "business profile created" 201 && PROVIDER_ID=$(echo "$BODY" | jq -r '.data.provider.id // .data.id')
+if [ -z "$PROVIDER_ID" ] || [ "$PROVIDER_ID" = null ]; then
+  SKIPPED=25
+  printf '  \033[33mSKIP\033[0m %s later steps: no business profile\n' "$SKIPPED"
+  exit 1
+fi
 printf '%%PDF-1.4\n%% smoke test\n' > /tmp/cl-smoke-doc.pdf; printf '\xff\xd8\xff\xe0smoke' > /tmp/cl-smoke-id.jpg
 for doc in "registration_certificate:/tmp/cl-smoke-doc.pdf:application/pdf" "id_document:/tmp/cl-smoke-id.jpg:image/jpeg"; do
   IFS=: read -r type file ctype <<< "$doc"

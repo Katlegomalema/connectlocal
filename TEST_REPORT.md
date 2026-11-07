@@ -1,112 +1,92 @@
-# ConnectLocal: full check before merging to main
+# ConnectLocal: test report
 
-Date: 6 November 2026. Branch: `delevop` (main already has PR #2 up to `93150b6`; this round is the next PR). Checked against the live Supabase project (dev) from Codespaces.
+Date: 7 November 2026. Branch: `delevop` (to be merged into `main` by pull request). Checked against the live
+Supabase project from GitHub Codespaces.
 
-**Summary.** The code checks are green: lint, 242 backend tests, 53 Flutter tests, `flutter analyze`, and both
-web builds. The live smoke test passes every step it can reach. It stops at the booking fee for two reasons
-that need someone with dashboard/database access:
-
-- the payment migration is not applied yet;
-- Supabase's built-in email sender limits sign-ups per hour.
-
-**Do not merge to main until items 1–3 under "Must do before the demo" are done and the smoke test passes.**
+**Summary.** Everything we can test automatically passes. The full booking flow runs end to end on the real database
+(35 of 35 steps). The repo has been cleaned up and CI has been fixed. Items still open are listed in section 4; none of them blocks the demo.
 
 ---
 
-## 1. What passed
+## 1. Results
 
 | Check | Result |
 |---|---|
-| Code review of all changes since `main` | 10 findings. All fixed (list in section 4). |
-| Backend `npm run lint` | 0 errors, 0 warnings |
-| Backend `npm test` | 234 unit tests (26 suites) + 8 integration tests: all pass |
-| `flutter analyze` | No issues found |
-| `flutter test` | 53 pass. 3 are skipped on purpose: real-upload tests that only run with `--tags e2e` against a running API. |
-| `flutter build web` (`lib/main.dart`) | Builds (`build/web`, 3.5 MB `main.dart.js`) |
-| `flutter build web` (`lib/main_admin.dart`) | Builds (`build/web-admin`, 2.8 MB `main.dart.js`) |
-| Smoke test `backend/scripts/smoke-test.sh` | 18 steps pass (details below). Cleanup leaves 0 test users. |
+| Backend lint (`npx eslint src/ --max-warnings=0`) | 0 errors, 0 warnings |
+| Backend tests (`npm test`) | 243 unit + 8 integration tests pass. Also checked on a clean Node 22 machine without `.env`, the way CI runs them. |
+| Flutter `flutter analyze` | No issues |
+| Flutter `flutter test` | 57 pass. 3 real-upload tests skip themselves when no API is running. |
+| Web build `lib/main.dart` (customer + provider app) | Builds |
+| Web build `lib/main_admin.dart` (admin site) | Builds |
+| Smoke test `backend/scripts/smoke-test.sh` on the live database | **35 passed, 0 failed, 0 skipped**; all test users deleted afterwards |
+| Database migrations | Up to date (`npm run db:push:dry`: "Remote database is up to date") |
 
-**What the smoke test proved on the live database:**
+**What the smoke test walks through:**
 
-- A name with digits is refused at sign-up.
-- Login works.
-- The phone code (demo code, no paid SMS) verifies.
-- The provider creates a business, and the documents (PDF and photo) upload straight to Storage through signed URLs and are attached.
-- The application is submitted.
-- A customer gets 403 on provider routes and on "approve".
-- The admin approves the business.
-- Bank details are saved (encrypted).
-- A service is added.
-- A booking is requested (R450, fee R67.50) for a weekday at 10:00 SAST.
+1. **Sign-up and phone.** A customer and a provider sign up through the API; the confirmation emails go out through Gmail SMTP. A name containing digits is refused. Both log in, and the customer verifies a phone code.
+2. **Provider application.** The provider creates a business and uploads a PDF and a photo straight to Storage. The application is submitted.
+3. **Admin approval.** A customer is refused (403) on provider and admin routes. The admin approves the business.
+4. **Setup.** The provider saves bank details (encrypted) and adds a service.
+5. **Booking and fee.** The customer books a weekday at 10:00 SAST (R450, booking fee R67.50) and pays the fee through PayFast. A simulated payment notification (ITN) marks the fee paid. Starting the payment again with the same key returns the same payment, so nobody is charged twice.
+6. **The job.** The provider accepts. Only the customer sees the PIN; the provider is refused it. The provider enters the PIN and the job starts, then completes the job.
+7. **Balance and review.** The customer pays the R382.50 balance in cash and the provider confirms it. The customer leaves a review; a review containing HTML is refused.
+8. **Delete account.** A user is refused (403) when deleting someone else's account. The customer deletes their own account, and the deleted account is signed out everywhere.
 
-## 2. What failed
+## 2. Fixed in this round
 
-| # | Failure | Cause | Fix |
-|---|---|---|---|
-| F1 | `POST /payments/intent` returns 500: "column payments.idempotency_key does not exist" | Migration `20261106120000_payment_idempotency.sql` (never charge twice) is not applied. My attempt to apply it was blocked. | Run `cd backend && npm run db:push -- --yes`, restart the API, run the smoke test again. |
-| F2 | 13 smoke-test steps skipped: fee paid, accept, PIN shown to the customer only, PIN on arrival, complete, cash balance, review, HTML in a review refused, delete someone else's account (403), delete own account, signed out afterwards | They all need the fee payment from F1. | Same as F1. |
-| F3 | Sign-up returns 429 after 1–2 accounts in an hour | Supabase's built-in email sender allows only a few emails per hour. At the campus demo the 3rd person to sign up would fail. | Set up custom SMTP in Supabase (SendGrid; a key is already in `.env`) and raise the email rate limit (SETUP.md section 7). The API now says "We cannot send more confirmation emails right now…" instead of a generic error. When this happens, the smoke test marks the step FAIL, creates the account the same way sign-up does, and carries on. |
-| F4 | Sign-up with `Longpass11` returns 400 from Supabase: "Password should contain … !@#$…" | The Supabase Auth password policy still requires a symbol. The agreed rule (app + API) is 8+ characters with a capital, a small letter and a number. | Supabase → Authentication → Email → Password requirements: "Lowercase, uppercase letters and digits". Until then the API says "Choose a stronger password: add a symbol". |
+| Problem | Fix |
+|---|---|
+| New users could not register: Supabase answered 500 "Error sending confirmation email", which the API reported as 401 "Registration failed" | Custom SMTP (Gmail App Password) set up in Supabase. Supabase errors now map to clear messages, which the app shows. Merged with Shuan's `backend-signup-fix`, which adds the test-only `AUTH_AUTO_CONFIRM_SIGNUPS` setting (off). |
+| Supabase Auth failed with "Database error finding users" | 4 old seed accounts (`@connectlocal.test`) had NULL values in `auth.users` columns. Repaired by setting them to empty text. |
+| Maps showed "API KEY REQUIRED" (CARTO), then "Access blocked" (OpenStreetMap's volunteer servers) | MapTiler with a free browser key that only works from our addresses. The key file is git-ignored. Without a key the app falls back to Esri's street map. |
+| Customers did not see the photos providers uploaded | Search and provider profiles now send every business photo (newest first; the newest is the profile picture) and each service's photos. Before, services had none, and only the oldest business photo was sent. |
+| CI failed on every push (red badges on GitHub) | The workflows were rewritten for the real project. Backend: Node 22 and 24, lint, tests, production audit. Frontend: the right folder, current Flutter, analyze, tests, both web builds. |
+| The backend needs Node 22+ (supabase-js uses Node's built-in WebSocket); the docs said Node 18 | `engines` set to `>=22`; README and CLAUDE.md updated. |
+| Smoke test made up a registration year in the future (e.g. 2074), which the app rightly refuses | It now uses a year between 2000 and 2025. |
 
-## 3. Security pass
+## 3. Security
 
 | Check | Result |
 |---|---|
-| Secrets in the code | None. `backend/.env` is git-ignored. `.env.example` has placeholders only. `.env.test` has only the public Supabase local-demo keys. |
-| Secrets in git history | None found in any commit (searched for JWTs, service-role and PayFast values, `postgres://user:pass@`). |
-| Service-role key only on the server | Read only in `backend/src/config/supabase.js`. Not in Flutter code. Not in either web build (searched `main.dart.js` for `service_role`, `eyJ…` tokens, passphrase). |
-| Every route checks role/ownership | Reviewed every router. Public routes are intended: health, categories, search, provider profile/services/schedule, reviews of a provider, PayFast ITN (validated by signature, source IP, amount and a server-side query), and payment return/cancel pages. Everything else uses `verifyToken`, plus `requireRole` or ownership checks in the services. The smoke test confirmed the 403s it reached. |
-| Rate limiting | Added (`middleware/rateLimit.js`): login 10 per 15 min per IP+email, register 10/h per IP, password reset 5/h, phone-code checks 10 per 15 min per user (on top of 5 tries per code), payment start 20 per 10 min per user. |
-| RLS on every table | On for all 28 tables in `public`. |
+| Secrets in code and git history | None. The whole history was searched for JWTs, SendGrid keys, the MapTiler key and the Gmail passwords from this week. `backend/.env` and `frontend/connect-local/.maptiler-key` are git-ignored. |
+| Service-role key only on the server | Yes. Not in the app or either web build. |
+| Every route checks role/ownership | Yes. The smoke test confirms the 403s above. |
+| Rate limits | Login, sign-up, password reset, phone codes and payment start. |
+| RLS | On for every table. |
+| Dependency audit (production) | No critical issues. 1 high (`zod`), see O1. |
 
-## 4. Code-review findings (all fixed)
+## 4. Still open
 
-1. Two quick PIN guesses could both be checked before the try was counted. Now the try is reserved first.
-2. The same race existed for phone codes. Same fix.
-3. A provider could accept two bookings at the same time. Accept now refuses when another booking is already accepted or in progress at that time.
-4. A double tap on "Book" made two pending bookings. The same request now returns the first booking.
-5. Paying the fee for a slot that someone else's paid booking took meanwhile. Now refused before checkout.
-6. Cash for the balance while a card checkout was open: the card payment is closed. If PayFast still completes it, it is refunded automatically.
-7. PayFast retries were answered "200 OK" even when the server failed, so no retry came. Now 500 (PayFast retries). A wrong amount still gets 200 and is ignored.
-8. Messages: the app could post into someone else's conversation by sending its id. Now checked.
-9. "Report review" hid the review immediately. Now it notifies the admins, who decide.
-10. Booking times were sent as the phone's local time. Now always South African time (UTC+2).
-
-## 5. Still open
-
-| # | Item | Why it is open / what to do |
+| # | Item | What to do |
 |---|---|---|
-| O1 | Apply the payment migration (F1) | Needs `npm run db:push -- --yes` (the tool blocked me). |
-| O2 | Custom SMTP + password policy (F3, F4) | Supabase dashboard settings. |
-| O3 | Two customers booking the same slot at the same instant | The check is in code, so two requests arriving within milliseconds can both pass. Only the first one to pay the fee is kept (the second is refused at payment), so nobody pays twice. A real fix is a DB exclusion constraint (migration; SQL to be shown first). |
-| O4 | Categories proposal (`docs/proposals/category_tree.sql`: 16 main categories + 61 subcategories) | Waiting for your OK. Then: migration, the app loads categories from the API (remove `kCategories`), update CLAUDE.md. |
-| O5 | Privacy / POPIA task | Not started: privacy pages, cookie banner, consents table (SQL first), 18+, data export/deletion, admin deletion list, `admin_logs`. |
-| O6 | `is_admin()` and `my_provider_id()` are SECURITY DEFINER and callable by anon | Low risk: they only answer about the caller. Could move to a private schema. |
-| O7 | `GET /users/:id` is public (name, picture, role) | Intended for profile pages. Make it signed-in only if that is not wanted. |
-| O8 | `CORS_ORIGINS` in `.env` is still the placeholder `https://<your-site>.netlify.app` | Set the real Netlify addresses before the demo (SETUP.md 5.3). |
-| O9 | Rate limits are kept in memory | Fine for one server. With several servers they would need Redis or the database. |
-| O10 | The real PayFast sandbox payment was not clicked through this round | Run `PAY=real bash scripts/smoke-test.sh` after O1 and pay with the sandbox card. |
+| O1 | `zod` < 4.6.6: memory exhaustion on very large inputs (high) | The fix is zod 4, a breaking upgrade that touches every request schema. Plan it as its own change. The 10 MB request size limit reduces the risk meanwhile. |
+| O2 | `CORS_ORIGINS` in `backend/.env` is still the placeholder | Set the real Netlify address(es) before deploying there. Also add the Netlify address to the MapTiler key's allowed origins. |
+| O3 | Two customers booking the same slot at the same instant | Only the first to pay keeps it; the other is refused at payment, so nobody pays twice. A database exclusion constraint would stop it earlier (migration; SQL to be reviewed first). |
+| O4 | Category tree proposal (`docs/proposals/category_tree.sql`) | Waiting for approval. |
+| O5 | Privacy/POPIA (privacy page, cookie banner, consents, 18+, data export and deletion, admin log) | Not started. |
+| O6 | 4 old seed accounts (`@connectlocal.test`, with 2 providers and 2 bookings) | Repaired, not deleted. The project rule is "no seed accounts": delete them with their data (SQL to be reviewed first). |
+| O7 | A real PayFast sandbox payment (clicking through checkout) | Run `PAY=real bash scripts/smoke-test.sh` with port 3000 public. |
+| O8 | Emails go through a personal Gmail account | Fine for the demo (about 500 emails a day; may land in spam). Use a transactional email service in production. Change the Gmail password, since it was shared in chat. |
+| O9 | Supabase password policy | Check that it is "lowercase, uppercase, digits", the same as the app. |
+| O10 | `is_admin()` / `my_provider_id()` are callable by anon; `GET /users/:id` is public (name, picture, role) | Low risk (they only answer about the caller / public profile data). |
+| O11 | Rate limits are kept in memory | Fine for one server. |
+| O12 | Android app id `com.example.connect_local`, release builds use the debug key | Change both before publishing to an app store. |
 
-## 6. Repo cleanup in this round
+## 5. Repo cleanup
 
-Removed (all still in git history; restore with `git checkout 7b6f474 -- <path>`):
-- `connect-local-v39.zip`, `connect-local-v42.zip`: the app now lives in `frontend/connect-local`.
-- `startapp.md`: personal run notes (in SETUP.md now).
-- `database/README.md`: said migrations go there; they are in `supabase/migrations/`.
-- `backend/migrations/` (stub `run.js` + 2 SQL files already folded into `20261104230000_…`), and the `npm run migrate` script.
-- `backend/QUICKSTART.js`, `backend/SETUP_COMPLETE.md`, `backend/BACKEND_STRUCTURE.md`: scaffold notes describing files that don't exist (e.g. `authController.js`).
+Removed (all still in git history: `git checkout <older commit> -- <path>`):
+- `frontend/README.md`: a planned structure that was never used (Riverpod, Google Maps, Dio).
+- `frontend/connect-local/FRONTEND_HANDOVER.md`: notes about the device-only version (demo login, "Reset demo data").
+- `frontend/connect-local/TEST_CHECKLIST.md`: the same; covered by the smoke test and TEST_ACCOUNTS.md.
+- `supabase/.temp/`: Supabase tool state, now git-ignored.
 
-Moved: `wire.pdf` → `assets/wireframes/wire.pdf`.
+Rewritten: README (what GitHub shows), the backend and app READMEs, CONTRIBUTING (the `delevop` → `main` flow),
+both CI workflows. Added: START.md (copy-paste start commands).
 
-Updated: README (structure, how to run, env vars, tests), SETUP.md (email sender, password rule, smoke test),
-TEST_ACCOUNTS.md (password rule).
-
-## How to repeat this check
+## How to repeat
 
 ```bash
 cd backend && npm run lint && npm test
-PORT=3005 node server.js &  API=http://localhost:3005 bash scripts/smoke-test.sh;  kill %1
+PORT=3005 node server.js &   API=http://localhost:3005 bash scripts/smoke-test.sh;   kill %1
 cd ../frontend/connect-local && flutter analyze && flutter test
-flutter build web -t lib/main.dart --dart-define=API_BASE_URL=https://<api>
-flutter build web -t lib/main_admin.dart --dart-define=API_BASE_URL=https://<api> --output build/web-admin
 ```
