@@ -381,6 +381,9 @@ class ApiClient {
       message = serverMessage.isNotEmpty && !serverMessage.startsWith('Too many requests')
           ? serverMessage
           : 'Too many attempts. Please wait a minute and try again.';
+    } else if (code == 'EXTERNAL_SERVICE_ERROR' && serverMessage.isNotEmpty) {
+      // The server explains which outside service failed, e.g. "We could not send the confirmation email".
+      message = serverMessage;
     } else if (status == 503) {
       message = 'ConnectLocal is busy or being updated. Please try again in a minute.';
     } else if (status >= 500) {

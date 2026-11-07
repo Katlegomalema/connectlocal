@@ -3,23 +3,30 @@ import 'package:flutter_map/flutter_map.dart';
 
 /// Map tiles for every map in the app.
 ///
-/// Default: CARTO "Voyager" raster tiles (OpenStreetMap data). Free for non-commercial use without an API key,
-/// and they allow apps and web pages (tile.openstreetmap.org does not want apps to use it as their tile
-/// server, and blocks apps that send a "com.example" name). The attribution below is REQUIRED by both.
-/// Another provider: --dart-define=MAP_TILE_URL=https://.../{z}/{x}/{y}.png --dart-define=MAP_ATTRIBUTION=...
+/// Default: OpenStreetMap's standard tiles (tile.openstreetmap.org). Free, no API key. Their tile policy asks
+/// for (1) the attribution below, always visible, (2) a real app name in the User-Agent (Android/iOS: see
+/// [userAgentPackageName]; web: the browser sends its own) and (3) light use: fine for testing and a demo.
+/// (CARTO's basemaps, used before, now show "API KEY REQUIRED" on every tile.)
+/// For heavy use switch to a paid provider:
+///   --dart-define=MAP_TILE_URL=https://.../{z}/{x}/{y}.png --dart-define=MAP_ATTRIBUTION=...
 class MapTiles {
   MapTiles._();
 
   static const urlTemplate = String.fromEnvironment(
     'MAP_TILE_URL',
-    defaultValue: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    defaultValue: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
   );
-  static const subdomains = ['a', 'b', 'c', 'd'];
-  static const attribution =
-      String.fromEnvironment('MAP_ATTRIBUTION', defaultValue: '© OpenStreetMap contributors © CARTO');
 
-  /// Sent as "flutter_map (za.connectlocal.app)" on Android/iOS so tile servers know who we are.
+  /// Only for URLs with {s}: OpenStreetMap asks apps NOT to use the old a./b./c. hosts.
+  static List<String> get subdomains => urlTemplate.contains('{s}') ? const ['a', 'b', 'c', 'd'] : const [];
+  static const attribution = String.fromEnvironment('MAP_ATTRIBUTION', defaultValue: '© OpenStreetMap contributors');
+
+  /// Sent as "flutter_map (za.connectlocal.app)" on Android/iOS so tile servers know who we are
+  /// (OpenStreetMap blocks the default "com.example" name).
   static const userAgentPackageName = 'za.connectlocal.app';
+
+  /// OpenStreetMap draws tiles up to zoom 19; closer zooms enlarge those.
+  static const maxNativeZoom = int.fromEnvironment('MAP_MAX_NATIVE_ZOOM', defaultValue: 19);
 }
 
 /// The tile layer + a friendly message (with Retry) when tiles can't load, e.g. no internet.
@@ -50,8 +57,9 @@ class _MapTileLayerState extends State<MapTileLayer> {
             urlTemplate: MapTiles.urlTemplate,
             subdomains: MapTiles.subdomains,
             userAgentPackageName: MapTiles.userAgentPackageName,
-            retinaMode: RetinaMode.isHighDensity(context),
-            maxNativeZoom: 20,
+            // Only servers with real @2x tiles ({r}); otherwise flutter_map would load 4x as many tiles.
+            retinaMode: MapTiles.urlTemplate.contains('{r}') && RetinaMode.isHighDensity(context),
+            maxNativeZoom: MapTiles.maxNativeZoom,
             errorTileCallback: _tileFailed,
           ),
           if (_failed)
@@ -89,7 +97,7 @@ class _MapTileLayerState extends State<MapTileLayer> {
       );
 }
 
-/// "© OpenStreetMap contributors © CARTO" in a corner of the map (required).
+/// "© OpenStreetMap contributors" in a corner of the map (required by the tile policy).
 class MapAttribution extends StatelessWidget {
   final AttributionAlignment alignment;
   const MapAttribution({super.key, this.alignment = AttributionAlignment.bottomRight});

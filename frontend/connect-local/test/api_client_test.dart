@@ -88,6 +88,19 @@ void main() {
         throwsA(isA<ApiException>().having((e) => e.message, 'message', 'Password must contain a number')));
   });
 
+  test('an outside service failing (e.g. the confirmation email) shows the server explanation', () async {
+    final api = ApiClient(
+      baseUrl: 'https://example.test',
+      httpClient: MockClient((_) async => jsonResponse(502, {
+            'success': false,
+            'code': 'EXTERNAL_SERVICE_ERROR',
+            'message': 'We could not send the confirmation email. Please try again later.'
+          })),
+    );
+    await expectLater(api.post('/auth/register', auth: false, body: {}),
+        throwsA(isA<ApiException>().having((e) => e.message, 'message', contains('confirmation email'))));
+  });
+
   test('server errors never show raw details', () async {
     final api = ApiClient(
       baseUrl: 'https://example.test',
