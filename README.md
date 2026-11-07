@@ -123,7 +123,6 @@ Latest results: [TEST_REPORT.md](TEST_REPORT.md).
 | `delevop` | Integration branch: everyone's work is merged here first. |
 | `feature/...`, `bugfix/...` | Short-lived branches from `delevop` (see [CONTRIBUTING.md](CONTRIBUTING.md)). |
 
-Backend and integration: Katlego Malema. Flutter screens: Shuan, radzivhonikharendwe.
 
 ## License
 
