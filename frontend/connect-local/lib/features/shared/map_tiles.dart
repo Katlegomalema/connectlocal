@@ -3,29 +3,44 @@ import 'package:flutter_map/flutter_map.dart';
 
 /// Map tiles for every map in the app.
 ///
-/// Default: OpenStreetMap's standard tiles (tile.openstreetmap.org). Free, no API key. Their tile policy asks
-/// for (1) the attribution below, always visible, (2) a real app name in the User-Agent (Android/iOS: see
-/// [userAgentPackageName]; web: the browser sends its own) and (3) light use: fine for testing and a demo.
-/// (CARTO's basemaps, used before, now show "API KEY REQUIRED" on every tile.)
-/// For heavy use switch to a paid provider:
-///   --dart-define=MAP_TILE_URL=https://.../{z}/{x}/{y}.png --dart-define=MAP_ATTRIBUTION=...
+/// Default: Esri "World Street Map" raster tiles. No API key; the attribution below must stay visible.
+/// With a free MapTiler key (maptiler.com, no credit card, non-commercial use) the app uses MapTiler instead:
+///   --dart-define=MAPTILER_KEY=...        (tool/run_web_codespace.sh passes $MAPTILER_KEY)
+/// Any other provider: --dart-define=MAP_TILE_URL=https://.../{z}/{x}/{y}.png --dart-define=MAP_ATTRIBUTION=...
+///
+/// Not used any more: CARTO basemaps (now show "API KEY REQUIRED") and tile.openstreetmap.org (volunteer
+/// servers that block apps without notice: "Access blocked").
 class MapTiles {
   MapTiles._();
 
-  static const urlTemplate = String.fromEnvironment(
-    'MAP_TILE_URL',
-    defaultValue: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-  );
+  static const _mapTilerKey = String.fromEnvironment('MAPTILER_KEY');
+  static const _customUrl = String.fromEnvironment('MAP_TILE_URL');
+  static const _customAttribution = String.fromEnvironment('MAP_ATTRIBUTION');
 
-  /// Only for URLs with {s}: OpenStreetMap asks apps NOT to use the old a./b./c. hosts.
+  static const esriUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
+  static const esriAttribution =
+      'Tiles © Esri. Sources: Esri, HERE, Garmin, USGS, © OpenStreetMap contributors, GIS User Community';
+  static const mapTilerAttribution = '© MapTiler © OpenStreetMap contributors';
+
+  static String get urlTemplate {
+    if (_customUrl.isNotEmpty) return _customUrl;
+    if (_mapTilerKey.isNotEmpty) return 'https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key=$_mapTilerKey';
+    return esriUrl;
+  }
+
+  static String get attribution {
+    if (_customAttribution.isNotEmpty) return _customAttribution;
+    if (_customUrl.isEmpty && _mapTilerKey.isNotEmpty) return mapTilerAttribution;
+    return _customUrl.isEmpty ? esriAttribution : '© OpenStreetMap contributors';
+  }
+
+  /// Only for URLs with {s} (several hosts a/b/c/d).
   static List<String> get subdomains => urlTemplate.contains('{s}') ? const ['a', 'b', 'c', 'd'] : const [];
-  static const attribution = String.fromEnvironment('MAP_ATTRIBUTION', defaultValue: '© OpenStreetMap contributors');
 
-  /// Sent as "flutter_map (za.connectlocal.app)" on Android/iOS so tile servers know who we are
-  /// (OpenStreetMap blocks the default "com.example" name).
+  /// Sent as "flutter_map (za.connectlocal.app)" on Android/iOS so tile servers know who we are.
   static const userAgentPackageName = 'za.connectlocal.app';
 
-  /// OpenStreetMap draws tiles up to zoom 19; closer zooms enlarge those.
+  /// Deepest zoom the server draws; closer zooms enlarge those tiles.
   static const maxNativeZoom = int.fromEnvironment('MAP_MAX_NATIVE_ZOOM', defaultValue: 19);
 }
 
@@ -97,7 +112,7 @@ class _MapTileLayerState extends State<MapTileLayer> {
       );
 }
 
-/// "© OpenStreetMap contributors" in a corner of the map (required by the tile policy).
+/// The map credit (e.g. "Tiles © Esri ...") in a corner of the map (required).
 class MapAttribution extends StatelessWidget {
   final AttributionAlignment alignment;
   const MapAttribution({super.key, this.alignment = AttributionAlignment.bottomRight});
@@ -105,6 +120,6 @@ class MapAttribution extends StatelessWidget {
   @override
   Widget build(BuildContext context) => RichAttributionWidget(
         alignment: alignment,
-        attributions: const [TextSourceAttribution(MapTiles.attribution)],
+        attributions: [TextSourceAttribution(MapTiles.attribution)],
       );
 }
