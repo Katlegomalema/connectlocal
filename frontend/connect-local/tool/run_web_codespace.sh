@@ -28,7 +28,9 @@ else
   API="http://localhost:3000"
 fi
 
-# Maps: Esri street map by default (no key). With a free MapTiler key: MAPTILER_KEY=... tool/run_web_codespace.sh
+# Maps: MapTiler when a key is set (MAPTILER_KEY=..., or the git-ignored file .maptiler-key next to pubspec.yaml),
+# otherwise Esri's street map (no key).
+if [ -z "${MAPTILER_KEY:-}" ] && [ -f .maptiler-key ]; then MAPTILER_KEY=$(tr -d '[:space:]' < .maptiler-key); fi
 MAP_DEFINE=""
 if [ -n "${MAPTILER_KEY:-}" ]; then
   MAP_DEFINE="--dart-define=MAPTILER_KEY=$MAPTILER_KEY"

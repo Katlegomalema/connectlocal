@@ -223,9 +223,17 @@ Restart the backend. Without this, the browser blocks every API call from the Ne
 
 ## 6. Maps and address search
 
-- **Map tiles:** CARTO "Voyager" (OpenStreetMap data), free without a key, allowed for apps and web pages.
-  The attribution "© OpenStreetMap contributors © CARTO" must stay visible (it is drawn on every map).
-  Another provider: build with `--dart-define=MAP_TILE_URL=...` and `--dart-define=MAP_ATTRIBUTION=...`.
+- **Map tiles: MapTiler** (free plan, non-commercial, 100k tiles a month). The key is a public browser key,
+  limited in MapTiler (Account → API keys) to our sites: the Codespace address, `localhost`, `?` (the Android
+  app sends no Origin) and the Netlify address (add it when you have it). It is NOT in git: put it in
+  `frontend/connect-local/.maptiler-key` (git-ignored; ask Katlego for it). `tool/run_web_codespace.sh` reads that file.
+  Other builds need it too:
+  ```bash
+  # Android Studio / APK / Netlify build: add
+  --dart-define=MAPTILER_KEY=$(cat .maptiler-key)
+  ```
+  Without a key the app uses Esri's World Street Map (no key). Not usable any more: CARTO ("API KEY REQUIRED")
+  and tile.openstreetmap.org ("Access blocked"). The map credit in the corner must stay visible.
 - **Address search** goes through our backend (`GET /api/v1/geo/search?q=`, `/geo/reverse?lat=&lng=`). It calls
   Nominatim at most once per second with ConnectLocal's name, and caches answers. Optional in `backend/.env`:
   `NOMINATIM_EMAIL` (so Nominatim can contact us instead of blocking us).
